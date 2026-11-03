@@ -44,6 +44,12 @@ Verified the correction with both storage and CLI integration tests (import retr
 - readCanvas rejects documents without a pages array instead of crashing. npm test runs the suite.
 - Verified: npm test (5 tests), plus a real server killed with SIGKILL restarts without manual lock cleanup.
 
+## QR pairing in the CLI (2026-11-03, Claude Code)
+
+- src/qr.js is a dependency-free QR encoder (byte mode, level M, versions 1–40) with ANSI half-block terminal rendering in explicit black/white, so it scans on light and dark themes.
+- serve --lan prints a QR code for the preferred private-range device link; canvas open prints one for the canvas device link on stderr (JSON stays on stdout). Shown in interactive terminals; --qr forces, --no-qr hides.
+- Verified: matrices identical to the qrcode npm package for 56 fixed-mask cases (versions 1–26, UTF-8); test/qr.test.js pins a reference fingerprint. Not yet scanned with the user's iPad camera.
+
 ## Next implementation step
 
 Test the storage flow on the user's iPad. Add Obsidian Markdown previews and useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.

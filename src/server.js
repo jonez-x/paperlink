@@ -6,8 +6,19 @@ import { documentFolder, createCanvas, listCanvases } from './documents.js';
 import { readCanvas, saveCanvas, validateStrokes } from './store.js';
 import { acquireFolderLock } from './lock.js';
 import { DraftStore } from './drafts.js';
+import { renderQr } from './qr.js';
 
-export async function serve({ port, lan, vault, folder }) {
+// Private-range Wi-Fi/Ethernet addresses first, so the QR code targets the home network.
+function lanAddresses() {
+  const addresses = [];
+  for (const entries of Object.values(networkInterfaces())) for (const entry of entries || []) {
+    if (entry.family === 'IPv4' && !entry.internal) addresses.push(entry.address);
+  }
+  const isPrivate = address => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address);
+  return addresses.sort((a, b) => isPrivate(b) - isPrivate(a));
+}
+
+export async function serve({ port, lan, vault, folder, qr = process.stdout.isTTY }) {
   const directory = vault ? await documentFolder(vault, folder) : null;
   const token = randomBytes(24).toString('hex');
   const drafts = new DraftStore();
@@ -67,9 +78,7 @@ export async function serve({ port, lan, vault, folder }) {
           const document = await readCanvas(directory, input.id);
           const suffix = '/#key=' + token + '&canvas=' + document.id;
           const links = ['http://localhost:' + port + suffix];
-          if (lan) for (const addresses of Object.values(networkInterfaces())) for (const address of addresses || []) {
-            if (address.family === 'IPv4' && !address.internal) links.push('http://' + address.address + ':' + port + suffix);
-          }
+          if (lan) for (const address of lanAddresses()) links.push('http://' + address + ':' + port + suffix);
           return json(res, 200, { id: document.id, title: document.title, links });
         }
         return json(res, 404, { error: 'Unknown CLI command.' });
@@ -105,11 +114,10 @@ export async function serve({ port, lan, vault, folder }) {
   } catch (error) { await cleanup(); throw error; }
   const suffix = directory ? '/#key=' + token : '/';
   console.log('Paperlink → http://localhost:' + port + suffix);
-  if (lan) for (const addresses of Object.values(networkInterfaces())) {
-    for (const address of addresses || []) {
-      if (address.family === 'IPv4' && !address.internal) console.log('Device link → http://' + address.address + ':' + port + suffix);
-    }
-  }
+  const deviceLinks = lan ? lanAddresses().map(address => 'http://' + address + ':' + port + suffix) : [];
+  for (const link of deviceLinks) console.log('Device link → ' + link);
+  if (qr && deviceLinks.length) console.log('\nScan to connect a device (' + deviceLinks[0].split('/#')[0] + '):\n' + renderQr(deviceLinks[0]) + '\n');
+  else if (qr && directory && !lan) console.log('Start with --lan to show a QR code for other devices.');
   const stop = () => server.close(() => { cleanup().then(() => process.exit(0)); });
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);

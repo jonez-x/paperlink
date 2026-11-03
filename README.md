@@ -57,8 +57,8 @@ npm start -- --lan --vault "/path/to/vault" --path "Paperlink/Canvases"
 node --test test/storage.test.js
 ```
 
-Open the full device link printed at startup. Use it only on a trusted LAN, since this prototype uses HTTP. The key stays in the browser tab session and is removed from the address bar after loading. The selected canvas reopens on reload. After restarting the server, open the new device link.
+Open the full device link printed at startup, or scan the QR code shown below it with the iPad camera. `canvas open` also prints a QR code for the selected canvas (on stderr, so the JSON output stays clean). QR codes appear in interactive terminals; force them with `--qr` or hide them with `--no-qr`. The QR code contains the access key, so do not share screenshots of it. Use it only on a trusted LAN, since this prototype uses HTTP. The key stays in the browser tab session and is removed from the address bar after loading. The selected canvas reopens on reload. After restarting the server, open the new device link.
 
-A folder lock prevents two Paperlink servers from editing the same store. Graceful shutdown removes it. After a crash, verify its recorded PID is no longer running before manually removing the stale lock.
+A folder lock in the per-user temp directory (never inside the vault) prevents two Paperlink servers from editing the same store. Graceful shutdown removes it; a lock left by a crashed process is detected and replaced automatically.
 
 This milestone supports single-page stroke documents. Other devices can open the same files, but must reopen them to see changes. Concurrent saves produce a visible conflict rather than silently overwriting data. Canvas files currently use JSON; an Obsidian Markdown preview is still pending.

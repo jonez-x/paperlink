@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { serve } from '../src/server.js';
 import { createCanvas, listCanvases, documentFolder } from '../src/documents.js';
+import { renderQr } from '../src/qr.js';
 const args = process.argv.slice(2);
+const wantsQr = stream => !args.includes('--no-qr') && (args.includes('--qr') || Boolean(stream.isTTY));
 function option(name, fallback) {
   const index = args.indexOf(name);
   if (index < 0) return fallback;
@@ -36,6 +38,9 @@ if (args[0] === 'canvas') {
       });
       result = await response.json();
       if (!response.ok) throw new Error(result.error);
+      // JSON stays on stdout; the QR code goes to stderr for people at a terminal.
+      const deviceLink = command === 'open' && result.links.find(link => !link.startsWith('http://localhost'));
+      if (deviceLink && wantsQr(process.stderr)) console.error('Scan to open "' + result.title + '" on a device:\n' + renderQr(deviceLink) + '\n');
     } else {
       throw new Error('Use canvas create <title>, list, open <id>, drafts, or import <title> --from-browser <id>.');
     }
@@ -47,14 +52,14 @@ if (args[0] === 'canvas') {
   process.exit(0);
 }
 if (args[0] !== 'serve') {
-  console.log('Paperlink\nUsage: paper serve [--port 8080] [--lan] [--vault PATH] [--path FOLDER]');
+  console.log('Paperlink\nUsage: paper serve [--port 8080] [--lan] [--vault PATH] [--path FOLDER] [--qr | --no-qr]');
   process.exit(args.includes('--help') ? 0 : 1);
 }
 const portIndex = args.indexOf('--port');
 const port = portIndex < 0 ? 8080 : Number(args[portIndex + 1]);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
 try {
-  await serve({ port, lan: args.includes('--lan'), vault: option('--vault'), folder: option('--path', '.') });
+  await serve({ port, lan: args.includes('--lan'), vault: option('--vault'), folder: option('--path', '.'), qr: wantsQr(process.stdout) });
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
