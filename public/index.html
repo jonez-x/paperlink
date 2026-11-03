@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="de">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Paperlink</title>
+<style>
+:root{color-scheme:light;--bg:#eee8db;--paper:#faf6eb;--ink:#302c28;--line:#d8cdbc}
+:root[data-theme=dark]{color-scheme:dark;--bg:#1d1c1a;--paper:#262420;--ink:#f0e8d6;--line:#464038}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px system-ui}
+header{height:64px;display:flex;align-items:center;gap:20px;padding:0 24px;border-bottom:1px solid var(--line)}
+strong{font-size:20px;letter-spacing:-1px}strong span{color:#f88135}
+small{margin-left:auto;color:var(--ink)}nav{display:flex;gap:6px;justify-content:center;padding:14px;flex-wrap:wrap}
+button,select{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);padding:10px 14px;border-radius:4px}
+button[aria-pressed=true]{background:#f88135;color:#241c14;border-color:#f88135}button{cursor:pointer}
+main{max-width:900px;margin:0 auto;padding:0 16px 20px}
+svg{display:block;width:100%;height:calc(100dvh - 145px);background:var(--paper);border:1px solid var(--line);touch-action:none}
+path{fill:none;stroke:var(--ink);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+</style>
+<header><strong>paper<span>link</span></strong><small id="status">Lokaler Entwurf</small><select id="theme" aria-label="Farbschema"><option value="system">System</option><option value="light">Hell</option><option value="dark">Dunkel</option></select></header>
+<nav aria-label="Zeichenwerkzeuge"><button id="pen" aria-pressed="true">Stift</button><button id="eraser" aria-pressed="false">Radierer</button><button id="undo">Rückgängig</button><button id="redo">Wiederholen</button></nav>
+<main><svg id="sheet" viewBox="0 0 900 1100" preserveAspectRatio="xMidYMin meet" aria-label="Schreibfläche"></svg></main>
+<script>
+const sheet = document.querySelector('#sheet');
+const status = document.querySelector('#status');
+const theme = document.querySelector('#theme');
+const media = matchMedia('(prefers-color-scheme: dark)');
+let strokes = [], future = [], active = null, tool = 'pen';
+try { strokes = JSON.parse(localStorage.getItem('paperlink-draft') || '[]'); } catch {}
+if (!Array.isArray(strokes)) strokes = [];
+function save() {
+  try { localStorage.setItem('paperlink-draft', JSON.stringify(strokes)); status.textContent = 'In diesem Browser gespeichert'; }
+  catch { status.textContent = 'Speichern fehlgeschlagen – Browser geöffnet lassen'; }
+}
+function render() {
+  sheet.replaceChildren();
+  for (const stroke of strokes) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', stroke);
+    sheet.append(path);
+  }
+}
+function point(event) {
+  return new DOMPoint(event.clientX, event.clientY).matrixTransform(sheet.getScreenCTM().inverse());
+}
+sheet.addEventListener('pointerdown', event => {
+  if (event.pointerType === 'touch' || active !== null) return;
+  if (tool === 'eraser') {
+    const index = Array.from(sheet.children).indexOf(event.target);
+    if (index >= 0) { strokes.splice(index, 1); future = []; render(); save(); }
+    return;
+  }
+  sheet.setPointerCapture(event.pointerId);
+  const p = point(event);
+  active = event.pointerId;
+  strokes.push('M ' + p.x + ' ' + p.y + ' l 0.01 0');
+  future = []; render();
+});
+sheet.addEventListener('pointermove', event => {
+  if (event.pointerId !== active) return;
+  for (const sample of event.getCoalescedEvents?.() || [event]) {
+    const p = point(sample);
+    strokes[strokes.length - 1] += ' L ' + p.x + ' ' + p.y;
+  }
+  sheet.lastChild.setAttribute('d', strokes[strokes.length - 1]);
+});
+function finish(event) { if (event.pointerId === active) { active = null; save(); } }
+sheet.addEventListener('pointerup', finish);
+sheet.addEventListener('pointercancel', finish);
+for (const name of ['pen','eraser']) document.getElementById(name).onclick = () => {
+  tool = name;
+  for (const id of ['pen','eraser']) document.getElementById(id).setAttribute('aria-pressed', id === name);
+};
+document.querySelector('#undo').onclick = () => { if (active === null && strokes.length) { future.push(strokes.pop()); render(); save(); } };
+document.querySelector('#redo').onclick = () => { if (active === null && future.length) { strokes.push(future.pop()); render(); save(); } };
+function applyTheme() { document.documentElement.dataset.theme = theme.value === 'system' ? (media.matches ? 'dark' : 'light') : theme.value; }
+try { theme.value = localStorage.getItem('paperlink-theme') || 'system'; } catch {}
+theme.onchange = () => { applyTheme(); try { localStorage.setItem('paperlink-theme',theme.value); } catch {} };
+media.addEventListener('change', applyTheme);
+applyTheme(); render();
+</script>
+</html>
