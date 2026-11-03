@@ -60,13 +60,21 @@ User decisions: storage is not tied to Obsidian. A "library" is any folder; Obsi
 - src/tui.js: dependency-free palette (truecolor or 256-color fallback, NO_COLOR respected), pixel logo banner, paper-like cards, select/input/confirm prompts with in-place redraw.
 - Verified: npm test (9 tests, including the full machine interface with a background server) and scripted keystrokes in a pseudo-terminal for the setup wizard and the New canvas flow (folder navigation, server start prompt, QR output). Not yet used by the user; the Obsidian preview setting is stored but not implemented.
 
+## Obsidian previews (2026-11-04, Claude Code)
+
+- src/preview.js renders `<id>.preview.svg` (light paper #fffdf5, ink #24231f, stroke width 3 as in the UI). The page width of 900 is kept so handwriting has the same scale everywhere; height follows the content, strokes beyond the page edges widen it. Atomic replacement.
+- Notes `<Title>.md` contain frontmatter `paperlink: <id>`, the embed `![[<id>.preview.svg]]` and `paper open <id8>`. Created once; found again by frontmatter in the canvas folder (survives renames), never overwritten. Name clashes get " (2)".
+- Server option `obsidian`: refreshes the SVG 1.5 s after the last save per canvas (one sync upload per pause, not per stroke), flushes pending previews on stop, writes note and preview on draft import (failures logged, never block the import). `paper start` passes `--obsidian/--no-obsidian`.
+- CLI: `canvas new` writes note and preview; new command `paper preview [id|title] [--path]` (alias `canvas preview`); `config set obsidian` now asks for a restart; Settings offers notes for existing canvases when turned on; status/serve cards show the setting.
+- Verified: npm test (11 tests: preview layout and escaping, note clash/rename/user-text preservation, end-to-end note on new, SVG flushed after a browser save on stop, note on import, idempotent `paper preview`). Rendered the three real vault canvases to PNG; handwriting correct. Not yet viewed inside Obsidian by the user; whether Obsidian re-renders the embed immediately after the SVG changes is unverified.
+
 ## Next implementation step
 
-Test the storage flow on the user's iPad. Add Obsidian Markdown previews and useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
+User checks the previews in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
 
 ## Current limitations
 
-- Browser-only drafts are per device/origin. Vault saves work. Live device sync, PDFs, vault previews, MCP and assistant triggers remain pending.
+- Browser-only drafts are per device/origin. Vault saves work. Live device sync, PDFs, MCP and assistant triggers remain pending.
 - CLI and API list one configured folder. No init/config or recursive index yet.
 - No pinch zoom, panning, pressure-aware ink, lasso or highlighter.
 - Undo history is session-only. localStorage data is only minimally validated.

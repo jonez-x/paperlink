@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm, realpath, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, realpath, mkdir, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
@@ -49,6 +49,8 @@ test('machine interface: config, background server, canvases, links and errors',
     const offline = await paper('canvas', 'new', 'Offline sheet');
     assert.equal(offline.folder, 'Notes');
     assert.deepEqual(offline.links, []);
+    assert.equal(offline.note, path.join(library, 'Notes', 'Offline sheet.md'), 'Obsidian note next to the canvas');
+    assert.match(await readFile(offline.note, 'utf8'), new RegExp('!\\[\\[' + offline.id + '\\.preview\\.svg\\]\\]'));
     assert.equal((await paper('status')).running, false);
     assert.match(await fails('canvas', 'drafts'), /not running/);
 
@@ -87,11 +89,21 @@ test('machine interface: config, background server, canvases, links and errors',
     const blocked = await fetch('http://127.0.0.1:' + port + '/cli/status', { method: 'POST', headers: { Origin: 'http://evil.example' }, body: JSON.stringify({ library }) });
     assert.equal(blocked.status, 403);
     assert.equal((await fetch('http://127.0.0.1:' + port + '/api/canvases/' + created.id)).status, 401);
-    assert.match(await fails('status', '--library', root), /different library/);
+    assert.match(await fails('open', created.id, '--library', root), /another library/);
+    const foreign = await paper('status', '--library', root);
+    assert.equal(foreign.library, library, 'status reports the server of another library');
+    assert.equal(foreign.configuredLibrary, root);
 
     assert.equal((await paper('stop')).stopped, true);
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal((await paper('status')).running, false);
+
+    // Stopping flushes the pending preview of the browser edit.
+    assert.match(await readFile(path.join(library, 'Uni', 'Analysis', created.id + '.preview.svg'), 'utf8'), /<path d="M 10 10 l 0\.01 0 L 30 40"\/>/);
+    assert.ok((await readdir(path.join(library, 'Inbox'))).includes('From iPad.md'), 'imported drafts get a note');
+    const refreshed = await paper('preview');
+    assert.equal(refreshed.length, 3);
+    assert.ok(refreshed.every(result => !result.noteCreated), 'existing notes are kept, not duplicated');
   } finally {
     await paper('stop').catch(() => {});
     await rm(root, { recursive: true, force: true });

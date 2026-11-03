@@ -12,6 +12,8 @@ import { serve } from './server.js';
 import { createCanvas, listCanvases, listFolders } from './documents.js';
 import { configPath, expandHome, loadConfig, saveConfig, stateDirectory, validPort } from './config.js';
 import { renderQr } from './qr.js';
+import { readCanvas } from './store.js';
+import { writeObsidianFiles } from './preview.js';
 import * as ui from './tui.js';
 
 const { c } = ui;
@@ -50,6 +52,7 @@ async function context(flags) {
     libraryInput: libraryInput ? expandHome(libraryInput) : null,
     port: validPort(flags.port ?? process.env.PAPERLINK_PORT ?? config.port),
     lan: flags.lan ? true : flags['no-lan'] ? false : config.lan,
+    obsidian: flags.obsidian ? true : flags['no-obsidian'] ? false : config.obsidian,
     json: Boolean(flags.json) || !process.stdout.isTTY,
     interactive: !flags.json && ui.isInteractive()
   };
@@ -143,7 +146,7 @@ async function startBackground(ctx, library) {
   await mkdir(stateDirectory(), { recursive: true });
   const logFile = path.join(stateDirectory(), 'server.log');
   const log = openSync(logFile, 'a');
-  const child = spawn(process.execPath, [BIN, 'serve', '--library', library, '--port', String(ctx.port), ctx.lan ? '--lan' : '--no-lan', '--no-qr'], {
+  const child = spawn(process.execPath, [BIN, 'serve', '--library', library, '--port', String(ctx.port), ctx.lan ? '--lan' : '--no-lan', ctx.obsidian ? '--obsidian' : '--no-obsidian', '--no-qr'], {
     detached: true, stdio: ['ignore', log, log], env: { ...process.env, PAPERLINK_BACKGROUND: '1' }
   });
   closeSync(log);
@@ -278,6 +281,8 @@ async function setupWizard(ctx) {
   console.log('  ' + c.muted('Saved to ' + configPath()) + '\n');
 }
 
+const RESTART_KEYS = ['lan', 'port', 'library', 'obsidian'];
+
 async function cmdConfig(ctx, positional) {
   const [action, key, ...rest] = positional;
   if (!action || action === 'show') {
@@ -302,12 +307,13 @@ async function cmdConfig(ctx, positional) {
   }[key];
   if (!update) throw new CliError('Unknown setting ' + key + '. Use library, defaultPath, obsidian, lan or port.');
   const config = await saveConfig({ ...ctx.config, [key]: await update() });
-  emit(ctx, { ...config, configPath: configPath() }, () => ok(key + ' = ' + config[key] + (['lan', 'port', 'library'].includes(key) ? c.muted('  · restart the server to apply') : '')));
+  emit(ctx, { ...config, configPath: configPath() }, () => ok(key + ' = ' + config[key] + (RESTART_KEYS.includes(key) ? c.muted('  · restart the server to apply') : '')) +
+    (key === 'obsidian' && config.obsidian ? '\n  ' + c.muted('Run `paper preview` to add notes for existing canvases.') : ''));
 }
 
 async function cmdServe(ctx) {
   const library = ctx.libraryInput ? await requireLibrary(ctx) : null;
-  const server = await serve({ port: ctx.port, lan: ctx.lan, library });
+  const server = await serve({ port: ctx.port, lan: ctx.lan, obsidian: ctx.obsidian, library });
   if (!process.stdout.isTTY || process.env.PAPERLINK_BACKGROUND) {
     console.log('Paperlink → ' + server.links[0]);
     for (const link of server.links.slice(1)) console.log('Device link → ' + link);
@@ -317,7 +323,8 @@ async function cmdServe(ctx) {
   console.log(ui.card([
     c.green('●') + ' running on port ' + ctx.port,
     c.muted('Library   ') + prettyPath(library),
-    c.muted('Network   ') + (ctx.lan ? 'iPad can connect' : 'this computer only')
+    c.muted('Network   ') + (ctx.lan ? 'iPad can connect' : 'this computer only'),
+    c.muted('Obsidian  ') + (ctx.obsidian ? 'previews on' : 'off')
   ], { title: 'Server' }));
   console.log(qrSection(ctx, server.links, 'Scan with your iPad to connect'));
   console.log('\n  ' + c.muted('Keep this window open · Ctrl-C stops the server · `paper start` runs it in the background') + '\n');
@@ -332,20 +339,23 @@ async function cmdStart(ctx) {
 
 async function cmdStop(ctx) {
   const library = await requireLibrary(ctx);
-  const result = await callServer(ctx, library, 'stop');
+  const result = await callServer(ctx, library, 'stop', { anyLibrary: true });
   emit(ctx, { running: false, stopped: Boolean(result) }, () => result ? ok('Server stopped') : '  ' + c.muted('Paperlink was not running.'));
 }
 
 async function cmdStatus(ctx) {
   const library = await requireLibrary(ctx);
-  const status = await callServer(ctx, library, 'status');
-  emit(ctx, status || { running: false, library, port: ctx.port }, () => statusCard(ctx, library, status));
+  const status = await callServer(ctx, library, 'status', { anyLibrary: true });
+  const otherLibrary = status && status.library !== library ? status.library : null;
+  emit(ctx, status ? { ...status, configuredLibrary: library } : { running: false, library, port: ctx.port }, () => statusCard(ctx, library, status) +
+    (otherLibrary ? '\n  ' + c.danger('! ') + c.muted('The server still uses ' + prettyPath(otherLibrary) + '. Restart it with `paper stop` and `paper start`.') : ''));
 }
 
 function statusCard(ctx, library, status) {
   return ui.card([
     c.muted('Library   ') + prettyPath(library),
     c.muted('Saves to  ') + prettyFolder(ctx.config.defaultPath),
+    ...(ctx.obsidian ? [c.muted('Obsidian  ') + 'previews on'] : []),
     c.muted('Server    ') + (status ? c.green('● running') + c.muted(' · port ' + status.port + (status.lan ? ' · iPad can connect' : ' · this computer only')) : c.muted('○ stopped'))
   ]);
 }
@@ -361,12 +371,13 @@ async function cmdNew(ctx, positional) {
     if (!ctx.flags.path) { folder = await pickFolder(library, folder); if (folder === null) return; }
   }
   const canvas = await createCanvas(library, folder, title);
+  const obsidian = ctx.obsidian ? await writeObsidianFiles(path.dirname(canvas.path), canvas) : null;
   // The canvas exists now; a missing or foreign server only means no link yet.
   const status = await (ctx.interactive ? requireServer(ctx, library) : callServer(ctx, library, 'status')).catch(() => null);
   const opened = status ? await callServer(ctx, library, 'open', { id: canvas.id }).catch(() => null) : null;
   jsonQr(ctx, opened?.links);
-  emit(ctx, { id: canvas.id, title: canvas.title, folder: canvas.folder, path: canvas.path, links: opened?.links ?? [] }, () =>
-    '\n' + canvasCard(canvas, 'Canvas created') + (opened ? qrSection(ctx, opened.links, 'Scan to start writing · saves automatically')
+  emit(ctx, { id: canvas.id, title: canvas.title, folder: canvas.folder, path: canvas.path, note: obsidian?.note ?? null, links: opened?.links ?? [] }, () =>
+    '\n' + canvasCard(canvas, 'Canvas created') + (obsidian ? '\n' + ok('Obsidian note ' + c.muted('· ' + path.basename(obsidian.note))) : '') + (opened ? qrSection(ctx, opened.links, 'Scan to start writing · saves automatically')
       : '\n  ' + c.muted('Start the server with `paper start` to get a QR code for this canvas.')));
 }
 
@@ -451,6 +462,26 @@ async function cmdImport(ctx, positional) {
   }
   const imported = await callServer(ctx, library, 'import', { id, title, path: folder });
   emit(ctx, imported, () => '\n' + canvasCard(imported, 'Draft imported') + '\n  ' + c.muted('The browser tab switches to this canvas and saves automatically.'));
+}
+
+// Creates or refreshes Obsidian previews; notes are only added where missing.
+async function cmdPreview(ctx, positional) {
+  const library = await requireLibrary(ctx);
+  const query = positional.join(' ');
+  const canvases = query ? [await findCanvas(ctx, library, query)].filter(Boolean) : await listCanvases(library, ctx.flags.path ?? '.', { recursive: true });
+  const results = [];
+  for (const canvas of canvases) {
+    const directory = path.dirname(canvas.path);
+    const files = await writeObsidianFiles(directory, await readCanvas(directory, canvas.id));
+    results.push({ id: canvas.id, title: canvas.title, folder: canvas.folder, ...files });
+  }
+  emit(ctx, results, () => {
+    if (!results.length) return '  ' + c.muted('No canvases yet. Create one with `paper canvas new`.');
+    const lines = results.map(result => ok(result.title + '  ' + c.muted(prettyFolder(result.folder).replace(/\x1b\[[0-9;]*m/g, '') + ' · ' +
+      (result.noteCreated ? 'note created: ' : 'preview updated: ') + path.basename(result.note))));
+    if (!ctx.obsidian) lines.push('  ' + c.muted('Automatic updates are off. Turn them on with `paper config set obsidian true`.'));
+    return '\n' + lines.join('\n');
+  });
 }
 
 // ── Interactive home ─────────────────────────────────────────────────────────
@@ -539,7 +570,14 @@ async function settings(ctx, library, status) {
     }
     if (value === null || value === undefined) continue;
     config = await saveConfig({ ...config, [choice]: value });
-    if (status && ['lan', 'port', 'library'].includes(choice)) {
+    if (choice === 'obsidian' && value) {
+      const count = (await listCanvases(config.library, '.', { recursive: true })).length;
+      if (count && await ui.confirm({ message: 'Add Obsidian notes for your ' + count + ' existing canvas' + (count === 1 ? '' : 'es') + ' now?', initial: true })) {
+        await cmdPreview({ ...ctx, config, obsidian: true }, []);
+        await ui.pause();
+      }
+    }
+    if (status && RESTART_KEYS.includes(choice)) {
       console.log('  ' + c.muted('The running server keeps its old settings until it restarts.'));
       await ui.pause();
     }
@@ -572,13 +610,15 @@ function helpText() {
     command('canvas open <id|title>', 'print links and QR code for a canvas'),
     command('canvas drafts', 'unsaved drafts from connected tabs'),
     command('canvas import "<title>" --from-browser <id>', 'save a draft as a canvas'),
-    '    ' + c.muted('Shortcuts: paper new, paper list, paper open'),
+    command('preview [id|title] [--path FOLDER]', 'write Obsidian previews and missing notes'),
+    '    ' + c.muted('Shortcuts: paper new, paper list, paper open, paper preview'),
     '',
     '  ' + c.bold('Options'),
     command('--library <folder>', 'use another library (alias --vault)'),
     command('--path <folder>', 'folder inside the library'),
     command('--port <n>', 'server port (default from config, 8080)'),
     command('--lan / --no-lan', 'allow devices on your network'),
+    command('--obsidian / --no-obsidian', 'Obsidian previews for this command or server'),
     command('--json', 'machine-readable output'),
     command('--qr / --no-qr', 'force or hide QR codes'),
     command('--no-start', 'never offer to start the server'),
@@ -600,7 +640,7 @@ export async function main(argv) {
     if (flags.version) return console.log(ctx.json ? JSON.stringify({ version: VERSION }) : 'paperlink ' + VERSION);
     let [command, ...rest] = positional;
     if (command === 'canvas') [command, ...rest] = rest.length ? ['canvas:' + rest[0], ...rest.slice(1)] : ['canvas:'];
-    else if (['new', 'list', 'open', 'drafts', 'import'].includes(command)) command = 'canvas:' + command;
+    else if (['new', 'list', 'open', 'drafts', 'import', 'preview'].includes(command)) command = 'canvas:' + command;
     if (flags.help || command === 'help') return console.log(helpText());
     switch (command) {
       case undefined: return ctx.interactive ? await home(ctx) : console.log(helpText());
@@ -615,6 +655,7 @@ export async function main(argv) {
       case 'canvas:open': return await cmdOpen(ctx, rest);
       case 'canvas:drafts': return await cmdDrafts(ctx);
       case 'canvas:import': return await cmdImport(ctx, rest);
+      case 'canvas:preview': return await cmdPreview(ctx, rest);
       default: throw new CliError('Unknown command ' + (command.replace('canvas:', 'canvas ') || 'canvas') + '. See `paper help`.');
     }
   } catch (error) {

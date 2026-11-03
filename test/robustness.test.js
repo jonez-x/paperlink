@@ -47,7 +47,7 @@ test('listing skips damaged files and sync conflict copies', async () => {
   try {
     const good = await createCanvas(vault, 'Notes', 'Good');
     const directory = path.dirname(good.path);
-    await writeFile(path.join(directory, good.id.replace(/.$/, '0') + '.paperlink.json'), '{"broken');
+    await writeFile(path.join(directory, good.id.replace(/.$/, last => last === '0' ? '1' : '0') + '.paperlink.json'), '{"broken');
     await writeFile(path.join(directory, good.id + ' 2.paperlink.json'), JSON.stringify({ ...good, path: undefined }));
     const mismatched = '00000000-0000-0000-0000-000000000000';
     await writeFile(path.join(directory, mismatched + '.paperlink.json'), JSON.stringify({ ...good, path: undefined }));

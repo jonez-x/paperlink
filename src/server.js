@@ -7,6 +7,7 @@ import { createCanvas, listCanvases } from './documents.js';
 import { readCanvas, saveCanvas, validateStrokes } from './store.js';
 import { acquireFolderLock } from './lock.js';
 import { DraftStore } from './drafts.js';
+import { writeObsidianFiles, writePreview } from './preview.js';
 
 // Private-range Wi-Fi/Ethernet addresses first, so QR codes target the home network.
 export function lanAddresses() {
@@ -21,7 +22,7 @@ export function lanAddresses() {
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 // Serves one library (any folder). Canvases may live in any non-hidden subfolder.
-export async function serve({ port, lan, library: libraryInput }) {
+export async function serve({ port, lan, obsidian = false, library: libraryInput }) {
   const library = libraryInput ? await realpath(libraryInput) : null;
   const token = randomBytes(24).toString('hex');
   const drafts = new DraftStore();
@@ -55,6 +56,21 @@ export async function serve({ port, lan, library: libraryInput }) {
     queue = result.catch(() => {});
     return result;
   }
+  // Obsidian previews follow saves after a short pause, so a stream of strokes
+  // causes one file write (and one sync upload) instead of one per stroke.
+  const pendingPreviews = new Map();
+  function schedulePreview(id, directory) {
+    if (!obsidian) return;
+    clearTimeout(pendingPreviews.get(id)?.timer);
+    const refresh = () => {
+      pendingPreviews.delete(id);
+      return serialize(async () => writePreview(directory, await readCanvas(directory, id)))
+        .catch(error => console.error('Preview for ' + id + ' failed: ' + error.message));
+    };
+    pendingPreviews.set(id, { timer: setTimeout(refresh, 1500), refresh });
+  }
+  const flushPreviews = () => Promise.all([...pendingPreviews.values()].map(({ timer, refresh }) => { clearTimeout(timer); return refresh(); }));
+
   function links(suffix) {
     const result = ['http://localhost:' + port + suffix];
     if (lan) for (const address of lanAddresses()) result.push('http://' + address + ':' + port + suffix);
@@ -81,10 +97,12 @@ export async function serve({ port, lan, library: libraryInput }) {
     const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
     if (!local || req.headers.origin || req.headers.host !== '127.0.0.1:' + port || req.method !== 'POST') return json(res, 403, { error: 'Local CLI access only.' });
     const input = await body(req);
-    if (input.library !== library) return json(res, 409, { error: 'This server uses a different library: ' + library, library });
+    // Status and stop also answer for another library, so a changed config never strands a running server.
+    const anyLibrary = input.anyLibrary === true && ['/cli/status', '/cli/stop'].includes(req.url);
+    if (input.library !== library && !anyLibrary) return json(res, 409, { error: 'The running server uses another library: ' + library + '. Restart it with `paper stop` and `paper start`.', library });
     switch (req.url) {
       case '/cli/status':
-        return json(res, 200, { running: true, pid: process.pid, library, port, lan, startedAt, links: links('/#key=' + token), drafts: drafts.list().filter(draft => draft.strokes !== null).length });
+        return json(res, 200, { running: true, pid: process.pid, library, port, lan, obsidian, startedAt, links: links('/#key=' + token), drafts: drafts.list().filter(draft => draft.strokes !== null).length });
       case '/cli/stop':
         json(res, 200, { stopping: true });
         setImmediate(stop);
@@ -103,6 +121,9 @@ export async function serve({ port, lan, library: libraryInput }) {
           index.set(created.id, directory);
           const imported = { id: created.id, title: created.title, revision: 1, folder: created.folder };
           drafts.markImported(input.id, imported);
+          // The canvas is saved; a failed preview must not make a retry import it twice.
+          if (obsidian) await writeObsidianFiles(directory, await readCanvas(directory, created.id))
+            .catch(error => console.error('Obsidian files for ' + created.id + ' failed: ' + error.message));
           return imported;
         });
         return json(res, 200, { id: document.id, title: document.title, folder: document.folder });
@@ -144,7 +165,9 @@ export async function serve({ port, lan, library: libraryInput }) {
       if (match && req.method === 'PUT') {
         const input = await body(req);
         const directory = await locate(match[1]);
-        return json(res, 200, await serialize(() => saveCanvas(directory, match[1], input)));
+        const saved = await serialize(() => saveCanvas(directory, match[1], input));
+        schedulePreview(match[1], directory);
+        return json(res, 200, saved);
       }
       json(res, 404, { error: 'Not found.' });
     } catch (error) {
@@ -170,11 +193,11 @@ export async function serve({ port, lan, library: libraryInput }) {
   function stop() {
     if (stopping) return;
     stopping = true;
-    server.close(() => { (lock ? lock.release() : Promise.resolve()).then(() => process.exit(0)); });
+    server.close(() => { flushPreviews().then(() => lock?.release()).then(() => process.exit(0)); });
     // Browser tabs keep connections alive; do not wait for them.
     setTimeout(() => server.closeAllConnections(), 500).unref();
   }
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
-  return { library, port, lan, links: links(library ? '/#key=' + token : '/'), stop };
+  return { library, port, lan, obsidian, links: links(library ? '/#key=' + token : '/'), stop };
 }

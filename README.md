@@ -42,8 +42,17 @@ Settings live in `~/.config/paperlink/config.json` (override with `PAPERLINK_CON
 paper config
 paper config set defaultPath "Uni"
 paper config set lan true
-paper config set obsidian true    # Obsidian Markdown previews (planned)
+paper config set obsidian true    # Obsidian Markdown previews
 ```
+
+## Obsidian previews
+
+With `obsidian` on, every canvas gets two companions in its folder:
+
+- `<Title>.md`, a note that embeds the handwriting and shows the `paper open` command. It is created once (by `canvas new`, `canvas import` or `paper preview`) and then belongs to you: rename or move it within the folder and add your own text below the embed; Paperlink never rewrites it.
+- `<id>.preview.svg`, the handwriting on light paper. The running server refreshes it about 1.5 seconds after the last save.
+
+`paper preview` creates previews and missing notes for existing canvases (all, or `paper preview <id|title>`). Restart the server after changing the setting.
 
 ## Connecting the iPad
 
