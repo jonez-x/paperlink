@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Paperlink</title>
@@ -16,9 +16,9 @@ main{max-width:900px;margin:0 auto;padding:0 16px 20px}
 svg{display:block;width:100%;height:calc(100dvh - 145px);background:var(--paper);border:1px solid var(--line);touch-action:none}
 path{fill:none;stroke:var(--ink);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
 </style>
-<header><strong>paper<span>link</span></strong><small id="status">Lokaler Entwurf</small><select id="theme" aria-label="Farbschema"><option value="system">System</option><option value="light">Hell</option><option value="dark">Dunkel</option></select></header>
-<nav aria-label="Zeichenwerkzeuge"><button id="pen" aria-pressed="true">Stift</button><button id="eraser" aria-pressed="false">Radierer</button><button id="undo">Rückgängig</button><button id="redo">Wiederholen</button></nav>
-<main><svg id="sheet" viewBox="0 0 900 1100" preserveAspectRatio="xMidYMin meet" aria-label="Schreibfläche"></svg></main>
+<header><strong>paper<span>link</span></strong><small id="status">Local draft</small><select id="theme" aria-label="Color scheme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></header>
+<nav aria-label="Drawing tools"><button id="pen" aria-pressed="true">Pen</button><button id="eraser" aria-pressed="false">Eraser</button><button id="undo">Undo</button><button id="redo">Redo</button></nav>
+<main><svg id="sheet" viewBox="0 0 900 1100" preserveAspectRatio="xMidYMin meet" aria-label="Writing surface"></svg></main>
 <script>
 const sheet = document.querySelector('#sheet');
 const status = document.querySelector('#status');
@@ -28,8 +28,8 @@ let strokes = [], future = [], active = null, tool = 'pen';
 try { strokes = JSON.parse(localStorage.getItem('paperlink-draft') || '[]'); } catch {}
 if (!Array.isArray(strokes)) strokes = [];
 function save() {
-  try { localStorage.setItem('paperlink-draft', JSON.stringify(strokes)); status.textContent = 'In diesem Browser gespeichert'; }
-  catch { status.textContent = 'Speichern fehlgeschlagen – Browser geöffnet lassen'; }
+  try { localStorage.setItem('paperlink-draft', JSON.stringify(strokes)); status.textContent = 'Saved in this browser'; }
+  catch { status.textContent = 'Save failed – keep this browser open'; }
 }
 function render() {
   sheet.replaceChildren();

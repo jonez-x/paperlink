@@ -1,11 +1,17 @@
-# Umsetzung und Abnahme
+# Roadmap and acceptance criteria
 
-| Etappe | Lieferumfang | Bestanden, wenn … |
+| Stage | Deliverables | Acceptance |
 |---|---|---|
-| 1 · Stiftprototyp | CLI-Start, eine Browserseite, Stift, Radierer, Undo, Zoom, Hell/Dunkel/System | Eine echte Aufgabe lässt sich auf dem iPad ohne störende Verzögerung, versehentliche Striche oder springende Seite schreiben. |
-| 2 · Abgaben und Vault | Mehrseitiges PDF, Seiten ergänzen, sichere Speicherung, Obsidian-Vorschau, PDF-Export | Nach Neustart und erneutem Öffnen sind alle Striche vorhanden. In Obsidian erscheint die Vorschau und der Export enthält Hintergrund und Anmerkungen. |
-| 3 · Zwei Geräte | Kopplung per QR, Live-Updates, lokaler Puffer und Wiederverbindung | iPad und Laptop zeigen dasselbe Blatt. Nach WLAN-Unterbrechung fehlen keine Striche und Wiederholungen erzeugen keine Duplikate. |
-| 4 · Assistent | CLI mit JSON, Snapshot und Annotation, lokaler Trigger, optionaler MCP-Adapter | Ein Assistent liest den markierten Ausschnitt und seine rückgängig machbare Anmerkung erscheint auf beiden Geräten. |
-| Später | Endlose Canvases, Obsidian-Editorplugin, fortlaufende Assistentensitzungen | Priorität ergibt sich aus der Nutzung des ersten vollständigen Ablaufs. |
+| 1 · Handwriting | CLI launch, browser page, pen, eraser, undo, zoom, Light/Dark/System | Complete a real exercise on iPad without disruptive latency, accidental marks or jumping pages. |
+| 2 · Assignments and vault | Multi-page PDFs, extra pages, durable storage, Obsidian preview, PDF export | Strokes survive restart. Obsidian shows the preview and exports include backgrounds and annotations. |
+| 3 · Multiple devices | QR pairing, live updates, local buffering and reconnect | iPad and laptop show the same page. Disconnection loses no strokes and retries create no duplicates. |
+| 4 · Assistant | JSON CLI, snapshots, annotations, local triggers and optional MCP | An assistant reads a selection and its undoable feedback appears on both devices. |
+| Later | Infinite canvas, Obsidian editor plugin, persistent assistant sessions | Prioritize from real use of the complete workflow. |
 
-Vor Umsetzung offen: Verfügbarkeit des CLI-Befehls `paper`, Lizenz, Paketformat, Rendertechnik sowie das genaue Verhalten bei konkurrierenden Bearbeitungen. Die Speicherstruktur und Browser-Kopplung werden zunächst mit Testdaten erprobt. Die wichtigste Entscheidung fällt am iPad: Ob die Browser-Oberfläche sich für längere handschriftliche Abgaben gut genug anfühlt.
+## Current state and next milestone
+
+The first prototype implements CLI serving, a single browser-local draft, basic pen and stroke eraser, undo/redo for drawing, and themes. It has only received a desktop browser smoke test.
+
+Next, complete the handwriting interaction before evaluating it on a real iPad. Add two-finger pan/zoom, pressure-aware strokes and undoable erasing. Verify palm handling, persistence after reload and theme switching. Device pairing is required before treating LAN mode as ready for normal use.
+
+Pending choices include CLI name availability, license, package format, rendering technology and concurrent editing semantics. Test the storage layout and pairing with disposable documents first. The main early decision is whether browser handwriting is comfortable enough for extended assignments.

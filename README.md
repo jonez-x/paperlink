@@ -1,15 +1,28 @@
 # Paperlink
 
-Ein selbst gehostetes Schreibheft für handschriftliche Abgaben, Notizen und PDF-Arbeitsblätter. Auf dem Laptop per CLI starten, im iPad-Browser mit dem Apple Pencil schreiben und die Dokumente dort im Obsidian-Vault speichern, wo sie hingehören. Ein Assistent deiner Wahl kann auf Wunsch eine Seite lesen und Anmerkungen hinterlassen.
+A self-hosted notebook for handwriting, assignments and PDF worksheets. Start it from your laptop's CLI, write with Apple Pencil in your iPad browser, and keep documents wherever you want in your Obsidian vault. An optional assistant can read a page and leave annotations.
 
-**CLI:** `paper` ist der geplante Befehl. Seine Verfügbarkeit ist noch ungeprüft.
+**Status:** Early handwriting prototype. It currently supports a single browser-local draft, pen, stroke eraser, undo/redo and Light/Dark/System themes. Vault storage, PDFs, multi-device synchronization and AI integration are planned.
 
-**Status:** Produktkonzept. Die unten gezeigten Befehle sind Entwürfe.
+## Run the prototype
 
-- [Produkt und Bedienung](docs/produkt.md)
-- [Architektur, CLI und KI-Anbindung](docs/architektur.md)
-- [Umsetzung und Abnahme](docs/roadmap.md)
+Requires Node.js 22 or newer.
 
-Die App funktioniert ohne Konto, Abo oder eingebauten Modelldienst. Browser und Dateien bleiben unter eigener Kontrolle. Ein optional angebundener Assistent verarbeitet die ausdrücklich übergebenen Inhalte nach seinen eigenen Bedingungen.
+```sh
+npm start
+npm start -- --port 8081
+```
 
-Open Source ist das Ziel. MIT ist der bisherige Lizenzvorschlag. Lizenz und öffentliche Veröffentlichung stehen noch aus.
+Open http://localhost:8080. The experimental `--lan` flag binds to all network interfaces. Device pairing is still pending, and browser drafts are separate on each device.
+
+The planned CLI command is `paper`. Its availability remains unchecked.
+
+## Documentation
+
+- [Product and interaction](docs/product.md)
+- [Architecture, CLI and AI integration](docs/architecture.md)
+- [Roadmap and acceptance criteria](docs/roadmap.md)
+
+The target product works without an account, subscription or bundled model service. An optional connected assistant processes requested content under its provider's terms.
+
+Open source is the goal. MIT is the proposed license. Licensing and public release remain undecided.
