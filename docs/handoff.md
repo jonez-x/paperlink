@@ -22,13 +22,19 @@ Project name Paperlink, proposed CLI command paper. Repo https://github.com/jone
 
 ## Latest milestone — browser vault saving
 
-Implemented src/server.js (authenticated local API and folder writer lock) and src/store.js (validation, atomic replacement, revision checking, bounded retry receipts). The browser now has a folder menu to create/open canvases, explicitly import its original local draft, retry pending saves and save a conflicting page as a new canvas.
+Implemented src/server.js (authenticated local API and folder writer lock) and src/store.js (validation, atomic replacement, revision checking, bounded retry receipts). The user explicitly chose CLI-only canvas/storage management. The browser file menu has been removed. CLI canvas open prints authenticated canvas links; canvas drafts lists connected draft snapshots; canvas import <title> --from-browser <id> imports a draft and binds its open tab to the new canvas. The browser autosaves and retains a retry control in its info popover. Conflicting edits are available as drafts for CLI import.
 
 Start serve with --vault and --path. The generated device link carries a random per-run token in its fragment. It is stored in sessionStorage and removed from the address bar. The selected document reopens on reload. Restarting the server requires the new device link.
 
 The browser retains pending snapshots and exact operation IDs in localStorage. Saving is serialized and unknown outcomes retry the same operation. Concurrent edits report a conflict. The initial local draft is retained after import.
 
 Verified: storage tests for disk persistence, duplicate retries, stale revision rejection, operation-ID reuse, invalid input preservation and path traversal rejection. Browser UI import, drawing to a vault canvas, reload and reopening after a full server restart passed. A test canvas named "Browser import verification" remains in the configured vault folder. The user has not yet verified the new storage flow on iPad.
+
+## CLI management correction
+
+Browser draft snapshots are kept in server memory (maximum 100 sessions) and published every two seconds by connected tabs. Import writes to disk before assigning the new document to the browser. Original local drafts and conflict recovery records remain intact. CLI management routes require loopback, a literal loopback Host header and no Origin; they also verify the requested folder. No tokens are written into the vault. See README for commands.
+
+Verified the correction with both storage and CLI integration tests (import retry, disk contents, open links, browser autosave API and Origin/auth rejection). In the browser, CLI import bound the existing draft, reload reopened it, and a new stroke reached disk at revision 3. A second test canvas, "CLI import verification", remains in the vault. The revised flow still needs the user's iPad check.
 
 ## Next implementation step
 

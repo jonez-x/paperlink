@@ -36,7 +36,19 @@ node bin/paper.js canvas create "Exercise 4" --vault "/path/to/vault" --path "Un
 node bin/paper.js canvas list --vault "/path/to/vault" --path "University/Math"
 ```
 
-Both commands return JSON. Listing covers the selected folder. Use the folder icon to open or create vault canvases. Import browser draft creates a separate canvas and retains the original draft. Saves use revision checks and atomic file replacement. Local pending edits survive reloads. Conflicts can be saved as a new copy.
+All canvas commands return JSON. Listing covers the selected folder. Manage files through the CLI; the browser only writes and autosaves. With the server running against the same vault and folder:
+
+```sh
+node bin/paper.js canvas open <canvas-id> --vault "/path/to/vault" --path "University/Math" --port 8080
+node bin/paper.js canvas drafts --vault "/path/to/vault" --path "University/Math"
+node bin/paper.js canvas import "My draft" --from-browser <draft-id> --vault "/path/to/vault" --path "University/Math"
+```
+
+`open` prints private local/device links for the selected canvas. `drafts` lists connected browser drafts (IDs, stroke counts and last update). Keep the original draft tab open with the server connection link: it publishes a temporary snapshot every two seconds. `import` writes that snapshot to a new canvas, then the browser switches to it and autosaves subsequent edits. The original local draft is retained. Imports are idempotent for the same browser draft ID during a server run. In-memory draft snapshots are lost on server restart; the browser republishes after reconnecting.
+
+Saves use revision checks and atomic replacement. Pending edits survive reloads. A save failure marks the info icon; retry there. Conflicting edits are exposed as a draft for CLI import into a separate canvas. Existing recovery snapshots remain in browser storage.
+
+CLI management endpoints only accept requests to the literal loopback host without an Origin header. They are intended for trusted local processes; browser APIs require the connection token.
 
 ## Browser vault storage
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { serve } from '../src/server.js';
-import { createCanvas, listCanvases } from '../src/documents.js';
+import { createCanvas, listCanvases, documentFolder } from '../src/documents.js';
 const args = process.argv.slice(2);
 function option(name, fallback) {
   const index = args.indexOf(name);
@@ -19,8 +19,25 @@ if (args[0] === 'canvas') {
       result = await createCanvas(vault, folder, args[2]);
     } else if (args[1] === 'list') {
       result = await listCanvases(vault, folder);
+    } else if (['open', 'drafts', 'import'].includes(args[1])) {
+      const port = Number(option('--port', '8080'));
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
+      const directory = await documentFolder(vault, folder);
+      const command = args[1];
+      const input = { directory };
+      if (command === 'open') input.id = args[2];
+      if (command === 'import') {
+        input.title = args[2];
+        input.id = option('--from-browser');
+        if (!input.id) throw new Error('Specify --from-browser with an ID from canvas drafts.');
+      }
+      const response = await fetch('http://127.0.0.1:' + port + '/cli/' + command, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input)
+      });
+      result = await response.json();
+      if (!response.ok) throw new Error(result.error);
     } else {
-      throw new Error('Use canvas create <title> or canvas list.');
+      throw new Error('Use canvas create <title>, list, open <id>, drafts, or import <title> --from-browser <id>.');
     }
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {

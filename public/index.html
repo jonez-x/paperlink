@@ -154,43 +154,21 @@ main::after {
   main::after { bottom: 8px; left: 20px; right: 20px; }
   nav { top: 72px; }
 }
-#documents-panel {
-  margin: auto; width: min(420px, calc(100vw - 32px)); max-height: 85dvh;
-  overflow: auto; padding: 20px; color: var(--ink); background: var(--bg);
-  border: 1px solid var(--line); border-radius: 8px;
-}
-#documents-panel label, #documents-panel input, #documents-panel select { display: block; width: 100%; margin: 10px 0; }
-#documents-panel input, #documents-panel select { padding: 12px; background: var(--paper); color: var(--ink); border: 1px solid var(--line); font: inherit; }
-#documents-panel button { margin: 4px 0; }
-#documents-panel p { color: var(--muted); font-size: 13px; line-height: 1.5; }
-#documents-button[data-error=true] { color: #df5429; background: #df542918; }
+#info[data-error=true] { color: #df5429; background: #df542918; }
 #connection-status[data-error=true] { color: #df5429; }
 </style>
 <header>
 <strong>paper<span>link</span></strong>
-<button id="documents-button" aria-label="Open canvases" title="Open canvases" popovertarget="documents-panel"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v12H3Z"/></svg></button>
+
 <div class="header-actions">
 <button id="info" aria-label="Storage information" title="Storage information" popovertarget="storage-info"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.5"/></svg></button>
 <button id="theme" aria-label="Color scheme: System" title="Color scheme: System"></button>
 </div>
 </header>
-<div id="documents-panel" popover>
-<h3>Canvases</h3>
-<p id="connection-status" role="status">Connect using the server's device link.</p>
-<label for="canvas-list">Saved in your vault</label>
-<select id="canvas-list" aria-label="Saved canvases"></select>
-<button id="open-canvas">Open</button>
-<label for="canvas-title">New canvas title</label>
-<input id="canvas-title" maxlength="200" placeholder="Untitled canvas">
-<button id="new-canvas">Create blank</button>
-<button id="import-draft">Import browser draft</button>
-<button id="save-copy">Save current page as a new canvas</button>
-<button id="retry-save">Retry pending save</button>
-<p>Import creates a separate canvas and keeps your original browser draft.</p>
-</div>
 <div id="storage-info" popover>
 <span id="status" role="status">Local draft</span>
-<p>Browser drafts stay on this device. Open or create a vault canvas to save to the server. Other devices see updates when they reopen it.</p>
+<p id="connection-status" role="status">Manage canvases and storage through the CLI. Canvas edits save automatically. Connected local drafts are available to CLI import while this tab stays open.</p>
+<button id="retry-save">Retry pending save</button>
 </div>
 <nav aria-label="Drawing tools">
 <button id="pen" aria-label="Pen" title="Pen" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1 12-12a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/></svg></button>
@@ -355,15 +333,15 @@ media.addEventListener('change', applyTheme);
 
 applyTheme(); render();
 
-const panel = document.querySelector('#documents-panel');
 const connectionStatus = document.querySelector('#connection-status');
-const canvasList = document.querySelector('#canvas-list');
 let currentDocument = null;
 let pendingSave = null;
 let saving = false;
 let saveBlocked = false;
 let connectionKey = '';
-const keyFromLink = new URLSearchParams(location.hash.slice(1)).get('key');
+const linkParameters = new URLSearchParams(location.hash.slice(1));
+const keyFromLink = linkParameters.get('key');
+const canvasFromLink = linkParameters.get('canvas');
 try {
   connectionKey = keyFromLink || sessionStorage.getItem('paperlink-key') || '';
   if (keyFromLink) sessionStorage.setItem('paperlink-key', keyFromLink);
@@ -372,14 +350,14 @@ if (keyFromLink) history.replaceState(null, '', location.pathname);
 function report(message, error = false) {
   connectionStatus.textContent = message;
   connectionStatus.dataset.error = String(error);
-  document.querySelector('#documents-button').dataset.error = String(error);
+  document.querySelector('#info').dataset.error = String(error);
 }
 function operationId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 async function api(route, options = {}) {
-  const response = await fetch('/api/canvases' + route, {
+  const response = await fetch(route.startsWith('/drafts/') ? '/api' + route : '/api/canvases' + route, {
     ...options,
     headers: { Authorization: 'Bearer ' + connectionKey, 'Content-Type': 'application/json' }
   });
@@ -424,24 +402,10 @@ async function flushSave() {
     } while (true);
   } catch (error) {
     saveBlocked = true;
-    status.textContent = error.status === 409 ? 'Save conflict · open canvases to keep a copy' : 'Save pending · open canvases to retry';
-    report(error.message + ' Your edits remain in this browser. Retry or save a new copy.', true);
-    document.querySelector('#documents-button').title = status.textContent;
+    status.textContent = error.status === 409 ? 'Save conflict · edits kept on this device' : 'Save pending · retry in storage information';
+    report(error.message + ' Your edits remain in this browser. Retry in storage information. Conflicting edits can be copied with CLI canvas import.', true);
+    document.querySelector('#info').title = status.textContent;
   } finally { saving = false; }
-}
-function canSwitch() {
-  if (saving || pendingSave || (currentDocument && localStorage.getItem(recoveryKey()))) {
-    throw new Error('Save, retry, or save a new copy before opening another canvas.');
-  }
-}
-async function refreshCanvases() {
-  const documents = await api('');
-  canvasList.replaceChildren();
-  for (const document of documents) {
-    const option = new Option(document.title, document.id);
-    canvasList.add(option);
-  }
-  if (!saveBlocked) report(documents.length ? 'Connected to your vault.' : 'Connected. Create your first canvas.');
 }
 function adopt(document, contents) {
   currentDocument = { id: document.id, title: document.title, revision: document.revision };
@@ -451,10 +415,8 @@ function adopt(document, contents) {
   render();
   status.textContent = 'Opened · ' + document.title;
 }
-async function openCanvas() {
-  canSwitch();
-  if (!canvasList.value) throw new Error('Select a canvas first.');
-  const document = await api('/' + canvasList.value);
+async function openCanvas(id) {
+  const document = await api('/' + id);
   const recovery = localStorage.getItem('paperlink-pending-' + document.id);
   if (recovery) {
     const saved = JSON.parse(recovery);
@@ -465,24 +427,6 @@ async function openCanvas() {
   } else {
     adopt(document, document.pages[0].strokes);
   }
-  if (!saveBlocked) panel.hidePopover();
-}
-async function createDocument(mode) {
-  if (saving) throw new Error('Wait for the current save to finish.');
-  if (mode !== 'copy') canSwitch();
-  let contents = [];
-  if (mode === 'import') {
-    contents = JSON.parse(localStorage.getItem('paperlink-draft') || '[]');
-    if (!Array.isArray(contents) || !contents.length) throw new Error('There is no browser draft to import.');
-  }
-  if (mode === 'copy') contents = strokes.slice();
-  const title = document.querySelector('#canvas-title').value.trim();
-  if (!title) throw new Error('Enter a canvas title.');
-  const created = await api('', { method: 'POST', body: JSON.stringify({ title }) });
-  adopt(created, contents);
-  saveToVault();
-  await refreshCanvases();
-  if (!saveBlocked) panel.hidePopover();
 }
 function action(id, callback) {
   document.getElementById(id).onclick = async () => {
@@ -490,26 +434,41 @@ function action(id, callback) {
     catch (error) { report(error.message, true); }
   };
 }
-panel.addEventListener('toggle', event => {
-  if (event.newState === 'open') refreshCanvases().catch(error => report(error.message, true));
-});
-action('open-canvas', openCanvas);
-action('new-canvas', () => createDocument('blank'));
-action('import-draft', () => createDocument('import'));
-action('save-copy', () => createDocument('copy'));
 action('retry-save', async () => { saveBlocked = false; await flushSave(); });
-let previouslyOpen;
-try { previouslyOpen = sessionStorage.getItem('paperlink-open-canvas'); } catch {}
+let previouslyOpen = canvasFromLink;
+try { previouslyOpen ||= sessionStorage.getItem('paperlink-open-canvas'); } catch {}
+let loading = Boolean(previouslyOpen);
 if (previouslyOpen) {
   sheet.style.pointerEvents = 'none';
-  refreshCanvases().then(async () => {
-    canvasList.value = previouslyOpen;
-    await openCanvas();
-  }).catch(error => {
-    report(error.message + ' Reconnect or choose a canvas.', true);
-    panel.showPopover();
-  }).finally(() => { sheet.style.pointerEvents = ''; });
+  openCanvas(previouslyOpen).catch(error => {
+    report(error.message + ' Open a fresh canvas link from the CLI.', true);
+    document.querySelector('#storage-info').showPopover();
+  }).finally(() => { loading = false; sheet.style.pointerEvents = ''; });
 }
+// A connected draft can be imported by the local CLI without a file-management UI.
+let browserDraftId;
+try {
+  browserDraftId = sessionStorage.getItem('paperlink-browser-draft') || operationId();
+  sessionStorage.setItem('paperlink-browser-draft', browserDraftId);
+} catch { browserDraftId = operationId(); }
+let polling = false;
+async function publishDraft() {
+  if (!connectionKey || loading || polling || active !== null || (currentDocument && !saveBlocked)) return;
+  polling = true;
+  try {
+    const result = await api('/drafts/' + browserDraftId, { method: 'PUT', body: JSON.stringify({ strokes: strokes.slice() }) });
+    if (result.document && active === null && !saving) {
+      const contents = strokes.slice();
+      adopt(result.document, contents);
+      saveToVault();
+      browserDraftId = operationId();
+      try { sessionStorage.setItem('paperlink-browser-draft', browserDraftId); } catch {}
+    }
+  } catch { /* The local draft remains available while disconnected. */ }
+  finally { polling = false; }
+}
+setInterval(publishDraft, 2000);
+void publishDraft();
 window.addEventListener('online', () => { if (currentDocument) { saveBlocked = false; void flushSave(); } });
 
 </script>

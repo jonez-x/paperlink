@@ -4,11 +4,12 @@ import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { documentFolder, createCanvas, listCanvases } from './documents.js';
-import { readCanvas, saveCanvas } from './store.js';
+import { readCanvas, saveCanvas, validateStrokes } from './store.js';
 
 export async function serve({ port, lan, vault, folder }) {
   const directory = vault ? await documentFolder(vault, folder) : null;
   const token = randomBytes(24).toString('hex');
+  const drafts = new Map();
   let lock;
   const lockPath = directory && path.join(directory, '.paperlink-server.lock');
   if (directory) {
@@ -45,17 +46,53 @@ export async function serve({ port, lan, vault, folder }) {
         return;
       }
       if (!directory) return json(res, 503, { error: 'Start the server with --vault to enable file storage.' });
+      if (req.url.startsWith('/cli/')) {
+        // Only local CLI clients may discover connection links or manage drafts.
+        const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+        if (!local || req.headers.origin || req.headers.host !== '127.0.0.1:' + port || req.method !== 'POST') return json(res, 403, { error: 'Local CLI access only.' });
+        const input = await body(req);
+        if (input.directory !== directory) return json(res, 409, { error: 'This server uses a different vault folder.' });
+        if (req.url === '/cli/drafts') return json(res, 200, [...drafts].map(([id, draft]) => ({ id, strokes: draft.strokes.length, updatedAt: draft.updatedAt, importedCanvas: draft.document?.id })));
+        if (req.url === '/cli/import') {
+          const draft = drafts.get(input.id);
+          if (!draft) return json(res, 404, { error: 'Browser draft not found. Keep its connected tab open.' });
+          if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 200) return json(res, 400, { error: 'Specify a title of 1–200 characters.' });
+          const document = await serialize(async () => {
+            if (draft.document) return draft.document;
+            const created = await createCanvas(vault, folder, input.title);
+            await saveCanvas(directory, created.id, { revision: 0, operationId: randomBytes(16).toString('hex'), strokes: draft.strokes });
+            draft.document = await readCanvas(directory, created.id);
+            return draft.document;
+          });
+          return json(res, 200, { id: document.id, title: document.title });
+        }
+        if (req.url === '/cli/open') {
+          const document = await readCanvas(directory, input.id);
+          const suffix = '/#key=' + token + '&canvas=' + document.id;
+          const links = ['http://localhost:' + port + suffix];
+          if (lan) for (const addresses of Object.values(networkInterfaces())) for (const address of addresses || []) {
+            if (address.family === 'IPv4' && !address.internal) links.push('http://' + address.address + ':' + port + suffix);
+          }
+          return json(res, 200, { id: document.id, title: document.title, links });
+        }
+        return json(res, 404, { error: 'Unknown CLI command.' });
+      }
       if (req.headers.authorization !== 'Bearer ' + token) return json(res, 401, { error: 'Open the connection link printed by the server.' });
       if (req.url === '/api/canvases' && req.method === 'GET') {
         const documents = await listCanvases(vault, folder);
         return json(res, 200, documents.map(({ id, title, revision }) => ({ id, title, revision })));
       }
-      if (req.url === '/api/canvases' && req.method === 'POST') {
+      const draftMatch = /^\/api\/drafts\/([a-f0-9]{32})$/.exec(req.url);
+      if (draftMatch && req.method === 'PUT') {
         const input = await body(req);
-        if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 200) return json(res, 400, { error: 'Enter a title of 1–200 characters.' });
-        const document = await serialize(() => createCanvas(vault, folder, input.title));
-        const { path: filename, ...data } = document;
-        return json(res, 201, data);
+        validateStrokes(input.strokes);
+        const id = draftMatch[1];
+        if (!drafts.has(id) && drafts.size >= 100) return json(res, 429, { error: 'Too many browser drafts. Restart the server.' });
+        const draft = drafts.get(id) || {};
+        draft.strokes = input.strokes;
+        draft.updatedAt = new Date().toISOString();
+        drafts.set(id, draft);
+        return json(res, 200, { document: draft.document || null });
       }
       const match = /^\/api\/canvases\/([a-f0-9-]{36})$/.exec(req.url);
       if (match && req.method === 'GET') return json(res, 200, await serialize(() => readCanvas(directory, match[1])));
