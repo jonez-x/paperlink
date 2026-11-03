@@ -1,64 +1,75 @@
 # Paperlink
 
-A self-hosted notebook for handwriting, assignments and PDF worksheets. Start it from your laptop's CLI, write with Apple Pencil in your iPad browser, and keep documents wherever you want in your Obsidian vault. An optional assistant can read a page and leave annotations.
+A self-hosted notebook for handwriting, assignments and PDF worksheets. Start it from your laptop's CLI, write with Apple Pencil in your iPad browser, and keep every canvas as a file in a folder you choose. That folder can be an Obsidian vault, but it does not have to be. An optional assistant can read a page and leave annotations.
 
-**Status:** Early handwriting prototype. It currently supports a single browser-local draft, pen, stroke eraser, undo/redo and Light/Dark/System themes. Vault saving and explicit browser-draft import are implemented. PDFs, live multi-device synchronization and AI integration are planned.
+**Status:** Early prototype. Pen, stroke eraser, undo/redo, Light/Dark/System themes, automatic saving to a library folder, QR pairing and an interactive CLI are implemented. PDFs, Obsidian previews, live multi-device synchronization and AI integration are planned.
 
-## Run the prototype
+## Install
 
-Requires Node.js 22 or newer.
+Requires Node.js 22 or newer. No dependencies.
 
 ```sh
-npm start
-npm start -- --port 8081
+npm link        # makes the `paper` command available (or use: node bin/paper.js)
+paper           # interactive menu; the first run asks where to keep canvases
 ```
 
-Open http://localhost:8080. The `--lan` flag binds to all network interfaces. With vault storage enabled, open the private device link printed by the server to authorize access. The link changes on restart. Browser-only drafts remain separate on each device.
+## Two ways to use the CLI
 
-The planned CLI command is `paper`. Its availability remains unchecked.
+**People:** run `paper` for a menu you drive with the arrow keys: create and open canvases, pick folders, start the server, scan QR codes, change settings. Commands that are missing input ask for it.
+
+**Scripts and AI agents:** every action is also a command with flags. Outside a terminal (or with `--json`) commands print JSON, never prompt, report errors on stderr as `{"error": "..."}` and exit with code 1.
+
+```sh
+paper init ~/Notes --default-path "Paperlink" --lan   # choose the library once
+paper start                                           # background server + QR code
+paper canvas new "Analysis sheet 3" --path "Uni/Analysis"
+paper canvas list
+paper canvas open "analysis"                          # ID, ID prefix or title
+paper status
+paper stop
+paper help                                            # all commands and options
+```
+
+`paper serve` runs the server in the current terminal instead of the background. `canvas drafts` and `canvas import "<title>" --from-browser <id>` save drawings made before a canvas was opened. Shortcuts: `paper new`, `paper list`, `paper open`.
+
+## Where canvases are stored
+
+The **library** is any existing folder. Canvases are `<id>.paperlink.json` files anywhere inside it; hidden folders (`.obsidian`, `.git`, `.trash`) are ignored. New canvases go to `--path`, or the configured default folder.
+
+Settings live in `~/.config/paperlink/config.json` (override with `PAPERLINK_CONFIG`). Flags win over `PAPERLINK_LIBRARY` / `PAPERLINK_PORT`, which win over the config file. `--vault` remains an alias for `--library`.
+
+```sh
+paper config
+paper config set defaultPath "Uni"
+paper config set lan true
+paper config set obsidian true    # Obsidian Markdown previews (planned)
+```
+
+## Connecting the iPad
+
+With network access enabled (`lan`), `paper start`, `paper serve` and `paper canvas new|open` print a QR code. Scan it with the iPad camera; the canvas opens and saves automatically from the first stroke. The code contains a per-run access key, so do not share screenshots of it. QR codes appear in terminals; `--qr` forces and `--no-qr` hides them.
+
+This prototype uses HTTP: use it only on a trusted network. The key stays in the browser tab session and is removed from the address bar after loading. After a server restart, scan the new code.
+
+## Storage guarantees
+
+Saves use revision checks and atomic replacement. Pending edits survive reloads; a save failure marks the info icon, where you can retry. Concurrent edits produce a visible conflict instead of silently overwriting; conflicting edits stay available as a draft for `canvas import`. Listing skips damaged files and sync conflict copies.
+
+A lock in the per-user temp directory (never inside the library) prevents two Paperlink servers from writing the same library. Locks left by crashed processes are replaced automatically.
+
+## Development
+
+```sh
+npm test
+```
 
 ## Documentation
 
 - [Product and interaction](docs/product.md)
 - [Architecture, CLI and AI integration](docs/architecture.md)
 - [Roadmap and acceptance criteria](docs/roadmap.md)
+- [Agent handoff](docs/handoff.md)
 
 The target product works without an account, subscription or bundled model service. An optional connected assistant processes requested content under its provider's terms.
 
 Open source is the goal. MIT is the proposed license. Licensing and public release remain undecided.
-
-## File storage milestone
-
-The CLI can now create and list versioned canvas files in an existing vault:
-
-```sh
-node bin/paper.js canvas create "Exercise 4" --vault "/path/to/vault" --path "University/Math"
-node bin/paper.js canvas list --vault "/path/to/vault" --path "University/Math"
-```
-
-All canvas commands return JSON. Listing covers the selected folder. Manage files through the CLI; the browser only writes and autosaves. With the server running against the same vault and folder:
-
-```sh
-node bin/paper.js canvas open <canvas-id> --vault "/path/to/vault" --path "University/Math" --port 8080
-node bin/paper.js canvas drafts --vault "/path/to/vault" --path "University/Math"
-node bin/paper.js canvas import "My draft" --from-browser <draft-id> --vault "/path/to/vault" --path "University/Math"
-```
-
-`open` prints private local/device links for the selected canvas. `drafts` lists connected browser drafts (IDs, stroke counts and last update). Keep the original draft tab open with the server connection link: it publishes a temporary snapshot every two seconds. `import` writes that snapshot to a new canvas, then the browser switches to it and autosaves subsequent edits. The original local draft is retained. Imports are idempotent for the same browser draft ID during a server run. In-memory draft snapshots are lost on server restart; the browser republishes after reconnecting.
-
-Saves use revision checks and atomic replacement. Pending edits survive reloads. A save failure marks the info icon; retry there. Conflicting edits are exposed as a draft for CLI import into a separate canvas. Existing recovery snapshots remain in browser storage.
-
-CLI management endpoints only accept requests to the literal loopback host without an Origin header. They are intended for trusted local processes; browser APIs require the connection token.
-
-## Browser vault storage
-
-```sh
-npm start -- --lan --vault "/path/to/vault" --path "Paperlink/Canvases"
-node --test test/storage.test.js
-```
-
-Open the full device link printed at startup, or scan the QR code shown below it with the iPad camera. `canvas open` also prints a QR code for the selected canvas (on stderr, so the JSON output stays clean). QR codes appear in interactive terminals; force them with `--qr` or hide them with `--no-qr`. The QR code contains the access key, so do not share screenshots of it. Use it only on a trusted LAN, since this prototype uses HTTP. The key stays in the browser tab session and is removed from the address bar after loading. The selected canvas reopens on reload. After restarting the server, open the new device link.
-
-A folder lock in the per-user temp directory (never inside the vault) prevents two Paperlink servers from editing the same store. Graceful shutdown removes it; a lock left by a crashed process is detected and replaced automatically.
-
-This milestone supports single-page stroke documents. Other devices can open the same files, but must reopen them to see changes. Concurrent saves produce a visible conflict rather than silently overwriting data. Canvas files currently use JSON; an Obsidian Markdown preview is still pending.

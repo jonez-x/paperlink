@@ -50,6 +50,16 @@ Verified the correction with both storage and CLI integration tests (import retr
 - serve --lan prints a QR code for the preferred private-range device link; canvas open prints one for the canvas device link on stderr (JSON stays on stdout). Shown in interactive terminals; --qr forces, --no-qr hides.
 - Verified: matrices identical to the qrcode npm package for 56 fixed-mask cases (versions 1–26, UTF-8); test/qr.test.js pins a reference fingerprint. Not yet scanned with the user's iPad camera.
 
+## Interactive CLI and libraries (2026-11-04, Claude Code)
+
+User decisions: storage is not tied to Obsidian. A "library" is any folder; Obsidian output is an opt-in setting. The CLI must serve people (colored, logo, arrow-key menus, text input, folder picker) and AI agents (every action as a command with flags and JSON) equally.
+
+- src/config.js: ~/.config/paperlink/config.json (PAPERLINK_CONFIG) with library, defaultPath, obsidian, lan, port. Precedence: flags > PAPERLINK_LIBRARY/PAPERLINK_PORT > config. --vault is an alias for --library.
+- src/server.js serves the whole library: canvas IDs are resolved through a recursive index (hidden folders and symlinked folders are skipped; network-triggered rescans are throttled to 1/s). New local CLI routes /cli/status and /cli/stop; import accepts a target path. Network error responses no longer contain absolute paths.
+- src/cli.js: commands init, config [set], serve, start (background, log in ~/.config/paperlink/server.log), stop, status, canvas new|list|open|drafts|import (+ shortcuts new/list/open). `canvas new` creates the file and prints the canvas QR code, so saving is automatic from the first stroke without the draft import detour. `paper` without arguments opens the menu; the first run starts a setup wizard. Non-TTY or --json: JSON only, never prompts, errors as JSON on stderr with exit code 1.
+- src/tui.js: dependency-free palette (truecolor or 256-color fallback, NO_COLOR respected), pixel logo banner, paper-like cards, select/input/confirm prompts with in-place redraw.
+- Verified: npm test (9 tests, including the full machine interface with a background server) and scripted keystrokes in a pseudo-terminal for the setup wizard and the New canvas flow (folder navigation, server start prompt, QR output). Not yet used by the user; the Obsidian preview setting is stored but not implemented.
+
 ## Next implementation step
 
 Test the storage flow on the user's iPad. Add Obsidian Markdown previews and useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
