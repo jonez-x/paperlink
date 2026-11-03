@@ -154,17 +154,43 @@ main::after {
   main::after { bottom: 8px; left: 20px; right: 20px; }
   nav { top: 72px; }
 }
+#documents-panel {
+  margin: auto; width: min(420px, calc(100vw - 32px)); max-height: 85dvh;
+  overflow: auto; padding: 20px; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+#documents-panel label, #documents-panel input, #documents-panel select { display: block; width: 100%; margin: 10px 0; }
+#documents-panel input, #documents-panel select { padding: 12px; background: var(--paper); color: var(--ink); border: 1px solid var(--line); font: inherit; }
+#documents-panel button { margin: 4px 0; }
+#documents-panel p { color: var(--muted); font-size: 13px; line-height: 1.5; }
+#documents-button[data-error=true] { color: #df5429; background: #df542918; }
+#connection-status[data-error=true] { color: #df5429; }
 </style>
 <header>
 <strong>paper<span>link</span></strong>
+<button id="documents-button" aria-label="Open canvases" title="Open canvases" popovertarget="documents-panel"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v12H3Z"/></svg></button>
 <div class="header-actions">
 <button id="info" aria-label="Storage information" title="Storage information" popovertarget="storage-info"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.5"/></svg></button>
 <button id="theme" aria-label="Color scheme: System" title="Color scheme: System"></button>
 </div>
 </header>
+<div id="documents-panel" popover>
+<h3>Canvases</h3>
+<p id="connection-status" role="status">Connect using the server's device link.</p>
+<label for="canvas-list">Saved in your vault</label>
+<select id="canvas-list" aria-label="Saved canvases"></select>
+<button id="open-canvas">Open</button>
+<label for="canvas-title">New canvas title</label>
+<input id="canvas-title" maxlength="200" placeholder="Untitled canvas">
+<button id="new-canvas">Create blank</button>
+<button id="import-draft">Import browser draft</button>
+<button id="save-copy">Save current page as a new canvas</button>
+<button id="retry-save">Retry pending save</button>
+<p>Import creates a separate canvas and keeps your original browser draft.</p>
+</div>
 <div id="storage-info" popover>
 <span id="status" role="status">Local draft</span>
-<p>This draft is stored in this browser on this device. Vault storage and device sync are coming later.</p>
+<p>Browser drafts stay on this device. Open or create a vault canvas to save to the server. Other devices see updates when they reopen it.</p>
 </div>
 <nav aria-label="Drawing tools">
 <button id="pen" aria-label="Pen" title="Pen" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1 12-12a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/></svg></button>
@@ -198,6 +224,7 @@ let beforeGesture = null, previousPoint = null, gestureTool = null;
 try { strokes = JSON.parse(localStorage.getItem('paperlink-draft') || '[]'); } catch {}
 if (!Array.isArray(strokes)) strokes = [];
 function save() {
+  if (currentDocument) { saveToVault(); return; }
   try { localStorage.setItem('paperlink-draft', JSON.stringify(strokes)); status.textContent = 'Saved in this browser'; }
   catch { status.textContent = 'Save failed – keep this browser open'; }
 }
@@ -325,6 +352,165 @@ theme.onclick = () => {
   try { localStorage.setItem('paperlink-theme', themeMode); } catch {}
 };
 media.addEventListener('change', applyTheme);
+
 applyTheme(); render();
+
+const panel = document.querySelector('#documents-panel');
+const connectionStatus = document.querySelector('#connection-status');
+const canvasList = document.querySelector('#canvas-list');
+let currentDocument = null;
+let pendingSave = null;
+let saving = false;
+let saveBlocked = false;
+let connectionKey = '';
+const keyFromLink = new URLSearchParams(location.hash.slice(1)).get('key');
+try {
+  connectionKey = keyFromLink || sessionStorage.getItem('paperlink-key') || '';
+  if (keyFromLink) sessionStorage.setItem('paperlink-key', keyFromLink);
+} catch { connectionKey = keyFromLink || ''; }
+if (keyFromLink) history.replaceState(null, '', location.pathname);
+function report(message, error = false) {
+  connectionStatus.textContent = message;
+  connectionStatus.dataset.error = String(error);
+  document.querySelector('#documents-button').dataset.error = String(error);
+}
+function operationId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+async function api(route, options = {}) {
+  const response = await fetch('/api/canvases' + route, {
+    ...options,
+    headers: { Authorization: 'Bearer ' + connectionKey, 'Content-Type': 'application/json' }
+  });
+  const result = await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status });
+  return result;
+}
+function recoveryKey() { return 'paperlink-pending-' + currentDocument.id; }
+function persistRecovery() {
+  localStorage.setItem(recoveryKey(), JSON.stringify({
+    document: currentDocument, strokes, request: pendingSave
+  }));
+}
+function saveToVault() {
+  try {
+    persistRecovery();
+    status.textContent = 'Saved locally · waiting for vault';
+    if (!saveBlocked) void flushSave();
+  } catch {
+    status.textContent = 'Local save failed – keep this page open';
+    report(status.textContent, true);
+  }
+}
+async function flushSave() {
+  if (saving || !currentDocument || saveBlocked) return;
+  saving = true;
+  try {
+    do {
+      pendingSave ||= { operationId: operationId(), revision: currentDocument.revision, strokes: strokes.slice() };
+      persistRecovery();
+      const result = await api('/' + currentDocument.id, { method: 'PUT', body: JSON.stringify(pendingSave) });
+      const sent = pendingSave.strokes;
+      currentDocument.revision = result.revision;
+      pendingSave = null;
+      if (JSON.stringify(strokes) === JSON.stringify(sent)) {
+        localStorage.removeItem(recoveryKey());
+        status.textContent = 'Saved to vault · ' + currentDocument.title;
+        report('Saved to vault.');
+        break;
+      }
+      persistRecovery();
+    } while (true);
+  } catch (error) {
+    saveBlocked = true;
+    status.textContent = error.status === 409 ? 'Save conflict · open canvases to keep a copy' : 'Save pending · open canvases to retry';
+    report(error.message + ' Your edits remain in this browser. Retry or save a new copy.', true);
+    document.querySelector('#documents-button').title = status.textContent;
+  } finally { saving = false; }
+}
+function canSwitch() {
+  if (saving || pendingSave || (currentDocument && localStorage.getItem(recoveryKey()))) {
+    throw new Error('Save, retry, or save a new copy before opening another canvas.');
+  }
+}
+async function refreshCanvases() {
+  const documents = await api('');
+  canvasList.replaceChildren();
+  for (const document of documents) {
+    const option = new Option(document.title, document.id);
+    canvasList.add(option);
+  }
+  if (!saveBlocked) report(documents.length ? 'Connected to your vault.' : 'Connected. Create your first canvas.');
+}
+function adopt(document, contents) {
+  currentDocument = { id: document.id, title: document.title, revision: document.revision };
+  try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
+  strokes = contents;
+  past = []; future = []; pendingSave = null; saveBlocked = false;
+  render();
+  status.textContent = 'Opened · ' + document.title;
+}
+async function openCanvas() {
+  canSwitch();
+  if (!canvasList.value) throw new Error('Select a canvas first.');
+  const document = await api('/' + canvasList.value);
+  const recovery = localStorage.getItem('paperlink-pending-' + document.id);
+  if (recovery) {
+    const saved = JSON.parse(recovery);
+    adopt(saved.document, saved.strokes);
+    pendingSave = saved.request;
+    report('Recovered local edits. Saving them to the vault.');
+    await flushSave();
+  } else {
+    adopt(document, document.pages[0].strokes);
+  }
+  if (!saveBlocked) panel.hidePopover();
+}
+async function createDocument(mode) {
+  if (saving) throw new Error('Wait for the current save to finish.');
+  if (mode !== 'copy') canSwitch();
+  let contents = [];
+  if (mode === 'import') {
+    contents = JSON.parse(localStorage.getItem('paperlink-draft') || '[]');
+    if (!Array.isArray(contents) || !contents.length) throw new Error('There is no browser draft to import.');
+  }
+  if (mode === 'copy') contents = strokes.slice();
+  const title = document.querySelector('#canvas-title').value.trim();
+  if (!title) throw new Error('Enter a canvas title.');
+  const created = await api('', { method: 'POST', body: JSON.stringify({ title }) });
+  adopt(created, contents);
+  saveToVault();
+  await refreshCanvases();
+  if (!saveBlocked) panel.hidePopover();
+}
+function action(id, callback) {
+  document.getElementById(id).onclick = async () => {
+    try { await callback(); }
+    catch (error) { report(error.message, true); }
+  };
+}
+panel.addEventListener('toggle', event => {
+  if (event.newState === 'open') refreshCanvases().catch(error => report(error.message, true));
+});
+action('open-canvas', openCanvas);
+action('new-canvas', () => createDocument('blank'));
+action('import-draft', () => createDocument('import'));
+action('save-copy', () => createDocument('copy'));
+action('retry-save', async () => { saveBlocked = false; await flushSave(); });
+let previouslyOpen;
+try { previouslyOpen = sessionStorage.getItem('paperlink-open-canvas'); } catch {}
+if (previouslyOpen) {
+  sheet.style.pointerEvents = 'none';
+  refreshCanvases().then(async () => {
+    canvasList.value = previouslyOpen;
+    await openCanvas();
+  }).catch(error => {
+    report(error.message + ' Reconnect or choose a canvas.', true);
+    panel.showPopover();
+  }).finally(() => { sheet.style.pointerEvents = ''; });
+}
+window.addEventListener('online', () => { if (currentDocument) { saveBlocked = false; void flushSave(); } });
+
 </script>
 </html>

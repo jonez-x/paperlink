@@ -10,8 +10,8 @@
 
 ## Current state and next milestone
 
-The first prototype implements CLI serving, a single browser-local draft, basic pen and stroke eraser, undo/redo for drawing, and themes. The user has verified pen input and erasing on a real iPad. CLI file creation and listing are now implemented separately from browser storage.
+The first prototype implements CLI serving, a single browser-local draft, basic pen and stroke eraser, undo/redo for drawing, and themes. The user has verified pen input and erasing on a real iPad. CLI file creation/listing and browser vault saving with explicit import are implemented.
 
-Next, complete the handwriting interaction before evaluating it on a real iPad. Connect the accepted writing prototype to durable vault files with an explicit import of existing browser drafts. Two-finger pan/zoom and pressure-aware strokes remain pending. Erasing is now undoable. Verify palm handling, persistence after reload and theme switching. Device pairing is required before treating LAN mode as ready for normal use.
+Next, complete the handwriting interaction before evaluating it on a real iPad. Verify vault import and saving on iPad, then add Obsidian previews and PDF support. Two-finger pan/zoom and pressure-aware strokes remain pending. Erasing is now undoable. Verify palm handling, persistence after reload and theme switching. Device pairing is required before treating LAN mode as ready for normal use.
 
 Pending choices include CLI name availability, license, package format, rendering technology and concurrent editing semantics. Test the storage layout and pairing with disposable documents first. The main early decision is whether browser handwriting is comfortable enough for extended assignments.

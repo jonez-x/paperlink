@@ -20,21 +20,29 @@ Project name Paperlink, proposed CLI command paper. Repo https://github.com/jone
 - Header theme icon cycles System/Light/Dark and persists selection. Storage explanation is behind an info popover.
 - src/documents.js creates version-1 JSON documents with stable IDs, revision and blank page. CLI canvas create/list uses explicit --vault and optional --path. Tested creation, listing in a fresh process and rejection of a path outside the root.
 
+## Latest milestone — browser vault saving
+
+Implemented src/server.js (authenticated local API and folder writer lock) and src/store.js (validation, atomic replacement, revision checking, bounded retry receipts). The browser now has a folder menu to create/open canvases, explicitly import its original local draft, retry pending saves and save a conflicting page as a new canvas.
+
+Start serve with --vault and --path. The generated device link carries a random per-run token in its fragment. It is stored in sessionStorage and removed from the address bar. The selected document reopens on reload. Restarting the server requires the new device link.
+
+The browser retains pending snapshots and exact operation IDs in localStorage. Saving is serialized and unknown outcomes retry the same operation. Concurrent edits report a conflict. The initial local draft is retained after import.
+
+Verified: storage tests for disk persistence, duplicate retries, stale revision rejection, operation-ID reuse, invalid input preservation and path traversal rejection. Browser UI import, drawing to a vault canvas, reload and reopening after a full server restart passed. A test canvas named "Browser import verification" remains in the configured vault folder. The user has not yet verified the new storage flow on iPad.
+
 ## Next implementation step
 
-Connect the browser to durable document files. Preserve existing localStorage drafts and offer an explicit import into a chosen document. Add selected-document loading, atomic server writes, revision checking, serialized edits and idempotent operation IDs. Keep pending edits locally until confirmed. Never silently replace an iPad draft with a blank server document.
-
-Add server tests for restart durability, conflict rejection, retry deduplication, failed writes and path boundaries. Then test the actual iPad flow. Add document selection and previews for Obsidian. Follow with multi-page PDF import/export and multi-device sync, then assistant interfaces.
+Test the storage flow on the user's iPad. Add Obsidian Markdown previews and useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
 
 ## Current limitations
 
-- Browser drafts are per device/origin. No server save, device sync, PDF support, vault preview, MCP or assistant trigger yet.
-- CLI file creation/listing is a backend milestone. List scans one folder. No init/config or recursive index yet.
+- Browser-only drafts are per device/origin. Vault saves work. Live device sync, PDFs, vault previews, MCP and assistant triggers remain pending.
+- CLI and API list one configured folder. No init/config or recursive index yet.
 - No pinch zoom, panning, pressure-aware ink, lasso or highlighter.
 - Undo history is session-only. localStorage data is only minimally validated.
 - Eraser hit testing and redraw iterate all paths. Optimize when document sizes require it.
 - The SVG fixed viewBox and CSS grid will need a shared world coordinate transform for zoom/pan.
-- LAN mode has no pairing/authentication yet. It currently only serves the app. Add access control before exposing document read/write APIs.
+- LAN API access uses a per-run bearer token. HTTP assumes a trusted LAN. QR pairing, HTTPS and production hardening remain pending.
 - Existing folder symlinks outside the vault are rejected. The file layer is not hardened against concurrent filesystem tampering.
 - Avoid claiming full iPad compatibility from desktop tests.
 
@@ -42,7 +50,7 @@ Add server tests for restart durability, conflict rejection, retry deduplication
 
 ```sh
 npm start
-npm start -- --port 8080 --lan
+npm start -- --port 8080 --lan --vault "/path/to/vault" --path "Paperlink/Canvases"
 node bin/paper.js canvas create "Exercise" --vault "/path/to/vault" --path "Notes"
 node bin/paper.js canvas list --vault "/path/to/vault" --path "Notes"
 ```

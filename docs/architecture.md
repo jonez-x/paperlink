@@ -12,7 +12,7 @@ The server performs atomic writes and is authoritative during editing. Every cha
 
 ## Proposed CLI
 
-The prototype implements `serve` and `canvas create/list --vault <root> --path <folder>`. Other commands describe the target interface. Browser drafts are not connected to the file store yet.
+The prototype implements `serve` and `canvas create/list --vault <root> --path <folder>`. Other commands describe the target interface. The folder menu now supports explicit draft import and single-page vault saving.
 
 ```sh
 paper init --vault ~/Documents/MyVault
