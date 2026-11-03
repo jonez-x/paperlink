@@ -37,7 +37,7 @@ body {
   background-color: var(--bg);
   background-image: linear-gradient(var(--line) 1px, transparent 1px),
                     linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size: 120px 120px;
+  background-size: 240px 240px;
   color: var(--ink);
   font: 14px Arial, Helvetica, sans-serif;
 }
@@ -79,6 +79,7 @@ button:hover { background: var(--line); }
 button[aria-pressed=true]:hover { background: #ff8b40; }
 button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 main {
+  position: relative;
   width: 100%;
   max-width: 960px;
   flex: 1;
@@ -89,6 +90,26 @@ main {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+main::before, main::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  opacity: .65;
+}
+main::before {
+  top: 0;
+  bottom: 24px;
+  left: 12px;
+  width: 6px;
+  background: repeating-linear-gradient(to bottom, var(--muted) 0 1px, transparent 1px 14px);
+}
+main::after {
+  bottom: 12px;
+  left: 24px;
+  right: 24px;
+  height: 6px;
+  background: repeating-linear-gradient(to right, var(--muted) 0 1px, transparent 1px 14px);
 }
 svg {
   display: block;
@@ -106,7 +127,9 @@ path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; s
   header { padding: 0 16px; gap: 12px; }
   small { display: none; }
   select { margin-left: auto; }
-  main { padding: 0 12px 12px; }
+  main { padding: 0 20px 20px; }
+  main::before { left: 8px; bottom: 20px; }
+  main::after { bottom: 8px; left: 20px; right: 20px; }
   nav { padding: 12px; }
 }
 </style>
@@ -118,7 +141,8 @@ const sheet = document.querySelector('#sheet');
 const status = document.querySelector('#status');
 const theme = document.querySelector('#theme');
 const media = matchMedia('(prefers-color-scheme: dark)');
-let strokes = [], future = [], active = null, tool = 'pen';
+let strokes = [], past = [], future = [], active = null, tool = 'pen';
+let beforeGesture = null, previousPoint = null, gestureTool = null;
 try { strokes = JSON.parse(localStorage.getItem('paperlink-draft') || '[]'); } catch {}
 if (!Array.isArray(strokes)) strokes = [];
 function save() {
@@ -142,19 +166,44 @@ for (const type of ['touchstart', 'touchmove']) {
 function point(event) {
   return new DOMPoint(event.clientX, event.clientY).matrixTransform(sheet.getScreenCTM().inverse());
 }
+// Test a forgiving, screen-sized swept area instead of requiring an exact path tap.
+function eraseBetween(from, to) {
+  const scale = Math.hypot(sheet.getScreenCTM().a, sheet.getScreenCTM().b);
+  const radius = 12 / scale;
+  const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / radius));
+  const paths = Array.from(sheet.children);
+  const removed = new Set();
+  paths.forEach((path, index) => {
+    path.style.strokeWidth = String(radius * 2);
+    for (let step = 0; step <= steps; step++) {
+      const fraction = step / steps;
+      const sample = new DOMPoint(from.x + (to.x - from.x) * fraction, from.y + (to.y - from.y) * fraction);
+      if (path.isPointInStroke(sample)) {
+        removed.add(index);
+        break;
+      }
+    }
+    path.style.removeProperty('stroke-width');
+  });
+  if (removed.size) {
+    strokes = strokes.filter((stroke, index) => !removed.has(index));
+    render();
+  }
+}
 sheet.addEventListener('pointerdown', event => {
   if (event.cancelable) event.preventDefault();
-  if (event.pointerType === 'touch' || active !== null) return;
-  if (tool === 'eraser') {
-    const index = Array.from(sheet.children).indexOf(event.target);
-    if (index >= 0) { strokes.splice(index, 1); future = []; render(); save(); }
-    return;
-  }
+  if (event.pointerType === 'touch' || active !== null || event.button !== 0) return;
   sheet.setPointerCapture(event.pointerId);
-  const p = point(event);
   active = event.pointerId;
-  strokes.push('M ' + p.x + ' ' + p.y + ' l 0.01 0');
-  future = []; render();
+  gestureTool = tool;
+  beforeGesture = strokes.slice();
+  previousPoint = point(event);
+  if (gestureTool === 'eraser') {
+    eraseBetween(previousPoint, previousPoint);
+  } else {
+    strokes.push('M ' + previousPoint.x + ' ' + previousPoint.y + ' l 0.01 0');
+    render();
+  }
 });
 sheet.addEventListener('pointermove', event => {
   if (event.pointerId !== active) return;
@@ -162,11 +211,25 @@ sheet.addEventListener('pointermove', event => {
   const samples = event.getCoalescedEvents?.();
   for (const sample of samples?.length ? samples : [event]) {
     const p = point(sample);
-    strokes[strokes.length - 1] += ' L ' + p.x + ' ' + p.y;
+    if (gestureTool === 'eraser') {
+      eraseBetween(previousPoint, p);
+    } else {
+      strokes[strokes.length - 1] += ' L ' + p.x + ' ' + p.y;
+      sheet.lastChild.setAttribute('d', strokes[strokes.length - 1]);
+    }
+    previousPoint = p;
   }
-  sheet.lastChild.setAttribute('d', strokes[strokes.length - 1]);
 });
-function finish(event) { if (event.pointerId === active) { active = null; save(); } }
+function finish(event) {
+  if (event.pointerId !== active) return;
+  active = null;
+  if (JSON.stringify(strokes) !== JSON.stringify(beforeGesture)) {
+    past.push(beforeGesture);
+    future = [];
+    save();
+  }
+  beforeGesture = null;
+}
 sheet.addEventListener('pointerup', finish);
 sheet.addEventListener('pointercancel', finish);
 sheet.addEventListener('lostpointercapture', finish);
@@ -174,8 +237,15 @@ for (const name of ['pen','eraser']) document.getElementById(name).onclick = () 
   tool = name;
   for (const id of ['pen','eraser']) document.getElementById(id).setAttribute('aria-pressed', id === name);
 };
-document.querySelector('#undo').onclick = () => { if (active === null && strokes.length) { future.push(strokes.pop()); render(); save(); } };
-document.querySelector('#redo').onclick = () => { if (active === null && future.length) { strokes.push(future.pop()); render(); save(); } };
+function restoreHistory(source, destination) {
+  if (active !== null || !source.length) return;
+  destination.push(strokes.slice());
+  strokes = source.pop();
+  render();
+  save();
+}
+document.querySelector('#undo').onclick = () => restoreHistory(past, future);
+document.querySelector('#redo').onclick = () => restoreHistory(future, past);
 function applyTheme() { document.documentElement.dataset.theme = theme.value === 'system' ? (media.matches ? 'dark' : 'light') : theme.value; }
 try { theme.value = localStorage.getItem('paperlink-theme') || 'system'; } catch {}
 theme.onchange = () => { applyTheme(); try { localStorage.setItem('paperlink-theme',theme.value); } catch {} };
