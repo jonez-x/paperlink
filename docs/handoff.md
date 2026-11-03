@@ -36,6 +36,14 @@ Browser draft snapshots are kept in server memory (maximum 100 sessions) and pub
 
 Verified the correction with both storage and CLI integration tests (import retry, disk contents, open links, browser autosave API and Origin/auth rejection). In the browser, CLI import bound the existing draft, reload reopened it, and a new stroke reached disk at revision 3. A second test canvas, "CLI import verification", remains in the vault. The revised flow still needs the user's iPad check.
 
+## Robustness fixes (2026-11-03, Claude Code)
+
+- Folder lock moved out of the vault into the per-user temp directory (src/lock.js, override with PAPERLINK_LOCK_DIR) so sync services never copy it. Locks of dead processes are detected by PID and replaced; a stale legacy .paperlink-server.lock in the vault is removed automatically.
+- Canvas listing skips invalid JSON, unsupported formats, ID/file-name mismatches and sync conflict copies instead of failing; the CLI reports skipped files on stderr.
+- Browser drafts live in src/drafts.js: at most 100 drafts and 64 MB in total, idle drafts expire after 15 minutes, and strokes of imported drafts are freed once the tab adopts the canvas.
+- readCanvas rejects documents without a pages array instead of crashing. npm test runs the suite.
+- Verified: npm test (5 tests), plus a real server killed with SIGKILL restarts without manual lock cleanup.
+
 ## Next implementation step
 
 Test the storage flow on the user's iPad. Add Obsidian Markdown previews and useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
@@ -65,7 +73,7 @@ The serve process reads index.html per request, so UI updates need only a browse
 
 ## Repository synchronization
 
-Prior work used the GitHub connector to publish files because gh authentication was invalid. Local and remote commits were created independently and have different histories. Do not force-push. Start from a fresh GitHub clone in a new environment, or carefully reconcile history while preserving local changes. Check the current remote main before any update.
+Prior work used the GitHub connector to publish files because gh authentication was invalid, so local and remote commits once had different histories. On 2026-11-03 the local checkout was moved to ~/Desktop/projects/paperlink and its main was reset to origin/main (identical file tree); the earlier local commits remain on branch codex-local-history. Do not force-push. Check the current remote main before any update.
 
 ## Keep this handoff current
 

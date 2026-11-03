@@ -14,8 +14,8 @@ export async function readCanvas(directory, id) {
   const filename = path.join(directory, id + '.paperlink.json');
   if (await realpath(filename) !== filename) throw new Error('Canvas symlinks are not supported.');
   const document = JSON.parse(await readFile(filename, 'utf8'));
-  if (document.id !== id || document.format !== 'paperlink' || document.version !== 1 ||
-      document.pages.length !== 1 || !Number.isInteger(document.revision)) {
+  if (document?.id !== id || document.format !== 'paperlink' || document.version !== 1 ||
+      !Array.isArray(document.pages) || document.pages.length !== 1 || !Number.isInteger(document.revision)) {
     throw new Error('Unsupported document format.');
   }
   validateStrokes(document.pages[0].strokes);

@@ -1,21 +1,17 @@
 import http from 'node:http';
-import { readFile, open, unlink } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
-import path from 'node:path';
 import { documentFolder, createCanvas, listCanvases } from './documents.js';
 import { readCanvas, saveCanvas, validateStrokes } from './store.js';
+import { acquireFolderLock } from './lock.js';
+import { DraftStore } from './drafts.js';
 
 export async function serve({ port, lan, vault, folder }) {
   const directory = vault ? await documentFolder(vault, folder) : null;
   const token = randomBytes(24).toString('hex');
-  const drafts = new Map();
-  let lock;
-  const lockPath = directory && path.join(directory, '.paperlink-server.lock');
-  if (directory) {
-    lock = await open(lockPath, 'wx').catch(() => { throw new Error('This folder is locked. Stop its other server, or inspect a stale .paperlink-server.lock before removing it.'); });
-    await lock.writeFile(String(process.pid));
-  }
+  const drafts = new DraftStore();
+  const lock = directory ? await acquireFolderLock(directory) : null;
   // One writer per folder; serialize revision checks and replacements.
   let queue = Promise.resolve();
   function serialize(action) {
@@ -52,7 +48,7 @@ export async function serve({ port, lan, vault, folder }) {
         if (!local || req.headers.origin || req.headers.host !== '127.0.0.1:' + port || req.method !== 'POST') return json(res, 403, { error: 'Local CLI access only.' });
         const input = await body(req);
         if (input.directory !== directory) return json(res, 409, { error: 'This server uses a different vault folder.' });
-        if (req.url === '/cli/drafts') return json(res, 200, [...drafts].map(([id, draft]) => ({ id, strokes: draft.strokes.length, updatedAt: draft.updatedAt, importedCanvas: draft.document?.id })));
+        if (req.url === '/cli/drafts') return json(res, 200, drafts.list());
         if (req.url === '/cli/import') {
           const draft = drafts.get(input.id);
           if (!draft) return json(res, 404, { error: 'Browser draft not found. Keep its connected tab open.' });
@@ -61,8 +57,9 @@ export async function serve({ port, lan, vault, folder }) {
             if (draft.document) return draft.document;
             const created = await createCanvas(vault, folder, input.title);
             await saveCanvas(directory, created.id, { revision: 0, operationId: randomBytes(16).toString('hex'), strokes: draft.strokes });
-            draft.document = await readCanvas(directory, created.id);
-            return draft.document;
+            const saved = await readCanvas(directory, created.id);
+            drafts.markImported(input.id, { id: saved.id, title: saved.title, revision: saved.revision });
+            return saved;
           });
           return json(res, 200, { id: document.id, title: document.title });
         }
@@ -86,13 +83,7 @@ export async function serve({ port, lan, vault, folder }) {
       if (draftMatch && req.method === 'PUT') {
         const input = await body(req);
         validateStrokes(input.strokes);
-        const id = draftMatch[1];
-        if (!drafts.has(id) && drafts.size >= 100) return json(res, 429, { error: 'Too many browser drafts. Restart the server.' });
-        const draft = drafts.get(id) || {};
-        draft.strokes = input.strokes;
-        draft.updatedAt = new Date().toISOString();
-        drafts.set(id, draft);
-        return json(res, 200, { document: draft.document || null });
+        return json(res, 200, { document: drafts.publish(draftMatch[1], input.strokes) });
       }
       const match = /^\/api\/canvases\/([a-f0-9-]{36})$/.exec(req.url);
       if (match && req.method === 'GET') return json(res, 200, await serialize(() => readCanvas(directory, match[1])));
@@ -104,7 +95,7 @@ export async function serve({ port, lan, vault, folder }) {
     } catch (error) { json(res, error.status || (error.code === 'ENOENT' ? 404 : 500), { error: error.message }); }
   });
   async function cleanup() {
-    if (lock) { await lock.close(); lock = null; await unlink(lockPath); }
+    if (lock) await lock.release();
   }
   try {
     await new Promise((resolve, reject) => {

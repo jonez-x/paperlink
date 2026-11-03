@@ -18,7 +18,7 @@ if (args[0] === 'canvas') {
       if (!args[2] || args[2].startsWith('--')) throw new Error('Specify a canvas title.');
       result = await createCanvas(vault, folder, args[2]);
     } else if (args[1] === 'list') {
-      result = await listCanvases(vault, folder);
+      result = await listCanvases(vault, folder, { onSkip: ({ path, reason }) => console.error('Skipped ' + path + ': ' + reason) });
     } else if (['open', 'drafts', 'import'].includes(args[1])) {
       const port = Number(option('--port', '8080'));
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');

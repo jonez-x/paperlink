@@ -30,15 +30,26 @@ export async function createCanvas(vault, folder, title) {
   return { ...document, path: filename };
 }
 
-export async function listCanvases(vault, folder) {
+const CANVAS_FILE = /^([a-f0-9-]{36})\.paperlink\.json$/;
+
+// Lists valid canvases. Unreadable files, unsupported formats and sync conflict
+// copies (e.g. "<id> 2.paperlink.json") are skipped and reported via onSkip,
+// so one damaged or half-synced file never hides the rest of the folder.
+export async function listCanvases(vault, folder, { onSkip = () => {} } = {}) {
   const directory = await documentFolder(vault, folder);
   const result = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.paperlink.json')) continue;
+    if (!entry.isFile() || !entry.name.endsWith('.paperlink.json') || entry.name.startsWith('.')) continue;
     const filename = path.join(directory, entry.name);
-    const document = JSON.parse(await readFile(filename, 'utf8'));
-    if (document.format !== 'paperlink' || document.version !== 1) {
-      throw new Error('Unsupported canvas format: ' + filename);
+    const match = CANVAS_FILE.exec(entry.name);
+    if (!match) { onSkip({ path: filename, reason: 'Unexpected file name (possibly a sync conflict copy).' }); continue; }
+    let document;
+    try { document = JSON.parse(await readFile(filename, 'utf8')); }
+    catch (error) { onSkip({ path: filename, reason: error instanceof SyntaxError ? 'Invalid JSON.' : error.message }); continue; }
+    if (document?.format !== 'paperlink' || document.version !== 1 || document.id !== match[1] ||
+        typeof document.title !== 'string' || !Number.isInteger(document.revision)) {
+      onSkip({ path: filename, reason: 'Unsupported or inconsistent canvas format.' });
+      continue;
     }
     result.push({ id: document.id, title: document.title, revision: document.revision, path: filename });
   }
