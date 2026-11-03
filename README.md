@@ -26,3 +26,14 @@ The planned CLI command is `paper`. Its availability remains unchecked.
 The target product works without an account, subscription or bundled model service. An optional connected assistant processes requested content under its provider's terms.
 
 Open source is the goal. MIT is the proposed license. Licensing and public release remain undecided.
+
+## File storage milestone
+
+The CLI can now create and list versioned canvas files in an existing vault:
+
+```sh
+node bin/paper.js canvas create "Exercise 4" --vault "/path/to/vault" --path "University/Math"
+node bin/paper.js canvas list --vault "/path/to/vault" --path "University/Math"
+```
+
+Both commands return JSON. Listing covers the selected folder. Browser drafts still use localStorage and are not connected to these files yet.

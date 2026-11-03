@@ -12,7 +12,7 @@ The server performs atomic writes and is authoritative during editing. Every cha
 
 ## Proposed CLI
 
-Only `serve` is implemented in the initial prototype. The remaining commands describe the target interface.
+The prototype implements `serve` and `canvas create/list --vault <root> --path <folder>`. Other commands describe the target interface. Browser drafts are not connected to the file store yet.
 
 ```sh
 paper init --vault ~/Documents/MyVault
