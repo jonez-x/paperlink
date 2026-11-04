@@ -95,9 +95,17 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - Menu: All canvases opens a picker; per canvas Open / Move or rename / Delete / Remove from list; plus Delete all and Remove missing.
 - Verified: npm test (16 tests incl. legacy preview migration, trash on delete, leaving a vault, CLI delete/forget --all with a sandboxed trash). Interactive delete driven in a pseudo-terminal.
 
+## Device pairing (2026-11-04, Claude Code)
+
+- The per-run access key is gone. Every QR code carries a one-time pairing code (`#pair=<code>[&canvas=<id>]`, 15 min, single use, held in server memory). The browser redeems it at `POST /api/pair` and stores a long-lived device token in localStorage; `~/.config/paperlink/devices.json` (mode 600) keeps only its SHA-256 hash, device name from the user agent ("iPad · Safari") and pairing date. Re-pairing a browser replaces its entry.
+- API auth accepts paired device tokens; the server reloads devices.json on an unknown token (max 1/s) and on `/cli/devices`, so `paper unpair` is immediate.
+- Links use the Bonjour name (`scutil --get LocalHostName` + `.local`, `PAPERLINK_HOST` overrides) first, IP addresses as fallbacks, so QR codes and note links share one browser origin. Notes get `[Open in Paperlink](http://<host>.local:<port>/#canvas=<id>)`; older notes have only their `paper open` line replaced on the next preview write.
+- CLI: `paper pair`, `paper devices`, `paper unpair <device>|--all`; menu entry "Pair a device", Settings › Paired devices.
+- Verified: npm test (16 tests incl. one-time codes, unknown/replaced/revoked tokens, device dedupe, note link, old note upgrade). In Chrome against a sandbox server: pairing link opens the canvas and cleans the URL, a stroke saves, a fresh load of the plain canvas link opens it after pairing, and without a token the page shows the pairing hint. Not yet tested on the iPad, in particular whether iPadOS resolves `<Name>.local`.
+
 ## Next implementation step
 
-User tries the file-based CLI and the notes in Obsidian. Then device pairing with stable links from the note. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
+User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
 
 ## Current limitations
 
@@ -106,7 +114,7 @@ User tries the file-based CLI and the notes in Obsidian. Then device pairing wit
 - Undo history is session-only. localStorage data is only minimally validated.
 - Eraser hit testing and redraw iterate all paths. Optimize when document sizes require it.
 - The SVG fixed viewBox and CSS grid will need a shared world coordinate transform for zoom/pan.
-- LAN API access uses a per-run bearer token. HTTP assumes a trusted LAN. QR pairing, HTTPS and production hardening remain pending.
+- LAN API access uses paired device tokens over HTTP and assumes a trusted LAN. HTTPS and production hardening remain pending.
 - Existing folder symlinks outside the vault are rejected. The file layer is not hardened against concurrent filesystem tampering.
 - Avoid claiming full iPad compatibility from desktop tests.
 

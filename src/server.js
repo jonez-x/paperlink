@@ -12,6 +12,7 @@ import { findNote, writeObsidianFiles, writePreview } from './preview.js';
 import { loadRegistry, relocate } from './registry.js';
 import { findMoved, followNote, moveCanvas } from './move.js';
 import { stateDirectory } from './config.js';
+import { canvasLink, deviceHost, deviceName, hashToken, loadDevices, pairDevice } from './devices.js';
 
 // Private-range Wi-Fi/Ethernet addresses first, so QR codes target the home network.
 export function lanAddresses() {
@@ -27,7 +28,6 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 
 // One server per user serves every canvas the local CLI has created or opened.
 export async function serve({ port, lan, obsidian = true }) {
-  const token = randomBytes(24).toString('hex');
   const drafts = new DraftStore();
   const lock = await acquireFolderLock(stateDirectory());
   const startedAt = new Date().toISOString();
@@ -97,7 +97,7 @@ export async function serve({ port, lan, obsidian = true }) {
           const followed = await followNote(current, id);
           if (followed) { await moved(id, followed); current = followed; noteSearchedAt.delete(id); }
         }
-        return writePreview(current, await readCanvas(current, id));
+        return writePreview(current, await readCanvas(current, id), { link: noteLink(id) });
       })
         .catch(error => console.error('Preview for ' + id + ' failed: ' + error.message));
     };
@@ -105,10 +105,41 @@ export async function serve({ port, lan, obsidian = true }) {
   }
   const flushPreviews = () => Promise.all([...pendingPreviews.values()].map(({ timer, refresh }) => { clearTimeout(timer); return refresh(); }));
 
+  // The Bonjour name comes first: QR codes and note links share its origin,
+  // where the browser keeps its device token. IP addresses are fallbacks.
   function links(suffix) {
     const result = ['http://localhost:' + port + suffix];
+    if (lan && deviceHost()) result.push('http://' + deviceHost() + ':' + port + suffix);
     if (lan) for (const address of lanAddresses()) result.push('http://' + address + ':' + port + suffix);
     return result;
+  }
+  const noteLink = id => canvasLink(port, id);
+
+  // One-time pairing codes, created for each QR code the CLI prints.
+  const pairCodes = new Map();
+  function pairingLinks(canvasId) {
+    const now = Date.now();
+    for (const [code, expires] of pairCodes) if (expires < now) pairCodes.delete(code);
+    while (pairCodes.size >= 100) pairCodes.delete(pairCodes.keys().next().value);
+    const code = randomBytes(16).toString('hex');
+    pairCodes.set(code, now + 15 * 60 * 1000);
+    return links('/#pair=' + code + (canvasId ? '&canvas=' + canvasId : ''));
+  }
+
+  // Paired devices by token hash; reloaded on a miss, at most once a second,
+  // so `paper unpair` takes effect without a restart.
+  let tokenHashes = new Set();
+  let lastDeviceLoad = 0;
+  async function reloadDevices() {
+    lastDeviceLoad = Date.now();
+    tokenHashes = new Set(Object.values(await loadDevices()).map(device => device.tokenHash));
+  }
+  async function authorized(req) {
+    const token = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization || '')?.[1];
+    if (!token) return false;
+    const hash = hashToken(token);
+    if (!tokenHashes.has(hash) && Date.now() - lastDeviceLoad > 1000) await reloadDevices();
+    return tokenHashes.has(hash);
   }
   function json(res, status, value) {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -133,7 +164,7 @@ export async function serve({ port, lan, obsidian = true }) {
     const input = await body(req);
     switch (req.url) {
       case '/cli/status':
-        return json(res, 200, { running: true, pid: process.pid, port, lan, obsidian, startedAt, links: links('/#key=' + token), drafts: drafts.list().filter(draft => draft.strokes !== null).length });
+        return json(res, 200, { running: true, pid: process.pid, port, lan, obsidian, startedAt, links: pairingLinks(), drafts: drafts.list().filter(draft => draft.strokes !== null).length });
       case '/cli/stop':
         json(res, 200, { stopping: true });
         setImmediate(stop);
@@ -152,7 +183,7 @@ export async function serve({ port, lan, obsidian = true }) {
           const imported = { id: created.id, title: created.title, revision: 1, path: created.path };
           drafts.markImported(input.id, imported);
           // The canvas is saved; a failed preview must not make a retry import it twice.
-          if (obsidian && await inVault(created.path)) await writeObsidianFiles(created.path, await readCanvas(created.path, created.id))
+          if (obsidian && await inVault(created.path)) await writeObsidianFiles(created.path, await readCanvas(created.path, created.id), { link: noteLink(created.id) })
             .catch(error => console.error('Obsidian files for ' + created.id + ' failed: ' + error.message));
           return imported;
         });
@@ -169,6 +200,11 @@ export async function serve({ port, lan, obsidian = true }) {
         });
         return json(res, 200, result);
       }
+      case '/cli/pair':
+        return json(res, 200, { links: pairingLinks() });
+      case '/cli/devices':
+        await reloadDevices();
+        return json(res, 200, { reloaded: true });
       case '/cli/forget': {
         // Before the CLI deletes or forgets a canvas: no preview may recreate files.
         clearTimeout(pendingPreviews.get(input.id)?.timer);
@@ -182,7 +218,7 @@ export async function serve({ port, lan, obsidian = true }) {
         await reindex();
         const file = await locate(input.id, { trusted: true });
         const document = await readCanvas(file, input.id);
-        return json(res, 200, { id: document.id, title: document.title, links: links('/#key=' + token + '&canvas=' + document.id) });
+        return json(res, 200, { id: document.id, title: document.title, links: pairingLinks(document.id) });
       }
       default:
         return json(res, 404, { error: 'Unknown CLI command.' });
@@ -197,7 +233,16 @@ export async function serve({ port, lan, obsidian = true }) {
         return;
       }
       if (req.url.startsWith('/cli/')) return await handleCli(req, res);
-      if (req.headers.authorization !== 'Bearer ' + token) return json(res, 401, { error: 'Open the connection link printed by the server.' });
+      if (req.url === '/api/pair' && req.method === 'POST') {
+        const input = await body(req);
+        const expires = pairCodes.get(input.code);
+        if (typeof input.code !== 'string' || !expires || expires < Date.now()) return json(res, 403, { error: 'This pairing code expired or was already used. Run `paper pair` on your computer and scan the new code.' });
+        pairCodes.delete(input.code);
+        const paired = await pairDevice({ deviceId: input.deviceId, name: deviceName(req.headers['user-agent']) });
+        await reloadDevices();
+        return json(res, 200, { deviceId: paired.deviceId, token: paired.token, name: paired.devices[paired.deviceId].name });
+      }
+      if (!(await authorized(req))) return json(res, 401, { error: 'This device is not paired. Run `paper pair` on your computer and scan the code.' });
       const draftMatch = /^\/api\/drafts\/([a-f0-9]{32})$/.exec(req.url);
       if (draftMatch && req.method === 'PUT') {
         const input = await body(req);
@@ -226,6 +271,7 @@ export async function serve({ port, lan, obsidian = true }) {
   });
 
   await reindex();
+  await reloadDevices();
   try {
     await new Promise((resolve, reject) => {
       server.once('error', reject);
@@ -246,5 +292,5 @@ export async function serve({ port, lan, obsidian = true }) {
   }
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
-  return { port, lan, obsidian, links: links('/#key=' + token), stop };
+  return { port, lan, obsidian, links: pairingLinks(), stop };
 }

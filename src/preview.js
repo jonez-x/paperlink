@@ -74,28 +74,32 @@ async function replaceFile(filename, content) {
   } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
-export async function writePreview(file, document) {
+const openLine = link => '[Open in Paperlink](' + link + ')';
+
+// `link` is the canvas link for the note (see devices.js); null when unknown.
+export async function writePreview(file, document, { link = null } = {}) {
   const vault = await obsidianVault(file);
   if (!vault) return null;
   const filename = previewPath(vault, document.id);
   await mkdir(path.dirname(filename), { recursive: true });
   await replaceFile(filename, renderPreview(document));
-  await migrateLegacyPreview(file, document.id);
+  await upgradeNote(file, document.id, link);
   return filename;
 }
 
-// Points an earlier note at the preview folder (only the embed line changes)
-// and removes the old preview next to the canvas.
-async function migrateLegacyPreview(file, id) {
+// Notes from earlier versions: the embed moves to the preview folder and the
+// `paper open` hint becomes a link. Only those exact lines change.
+async function upgradeNote(file, id, link) {
   const legacy = path.join(path.dirname(file), legacyPreviewName(id));
-  if (!(await access(legacy).then(() => true, () => false))) return;
+  const hasLegacy = await access(legacy).then(() => true, () => false);
   const note = await findNote(path.dirname(file), id);
   if (note) {
     const text = await readFile(note, 'utf8');
-    const updated = text.replace('![[' + legacyPreviewName(id) + ']]', embed(id));
+    let updated = text.replace('![[' + legacyPreviewName(id) + ']]', embed(id));
+    if (link) updated = updated.replace('Open on your iPad: `paper open ' + id.slice(0, 8) + '`', openLine(link));
     if (updated !== text) await replaceFile(note, updated);
   }
-  await unlink(legacy).catch(() => {});
+  if (hasLegacy) await unlink(legacy).catch(() => {});
 }
 
 const FRONTMATTER_ID = /^---\r?\n(?:.*\r?\n)*?paperlink: *([a-f0-9-]{36}) *\r?\n/;
@@ -141,14 +145,14 @@ export async function freeName(directory, base, extension, taken = name => acces
   throw new Error('Cannot find a free name for ' + base + extension + ' in ' + directory + '.');
 }
 
-export async function ensureNote(file, document) {
+export async function ensureNote(file, document, { link = null } = {}) {
   const directory = path.dirname(file);
   const existing = await findNote(directory, document.id);
   if (existing) return { path: existing, created: false };
   const content = [
     '---', 'paperlink: ' + document.id, '---', '',
     embed(document.id), '',
-    'Open on your iPad: `paper open ' + document.id.slice(0, 8) + '`', ''
+    link ? openLine(link) : 'Open with `paper open ' + document.id.slice(0, 8) + '`', ''
   ].join('\n');
   // Files from earlier versions are named by ID; their note takes the title.
   const base = safeFileName(/^[a-f0-9-]{36}$/.test(canvasBase(file)) ? document.title : canvasBase(file));
@@ -163,8 +167,8 @@ export async function ensureNote(file, document) {
 }
 
 // Preview and note together, for canvases created or refreshed through the CLI.
-export async function writeObsidianFiles(file, document) {
-  const preview = await writePreview(file, document);
-  const note = await ensureNote(file, document);
+export async function writeObsidianFiles(file, document, options = {}) {
+  const note = await ensureNote(file, document, options);
+  const preview = await writePreview(file, document, options);
   return { preview, note: note.path, noteCreated: note.created };
 }

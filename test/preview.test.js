@@ -45,15 +45,16 @@ test('notes are created once, survive renames and avoid name clashes', async () 
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('previews from earlier versions move to the preview folder', async () => {
+test('notes from earlier versions get the preview folder and a link', async () => {
   const directory = await vault();
   try {
     const file = path.join(directory, ID + '.paperlink.json');
     await writeFile(path.join(directory, ID + '.preview.svg'), '<svg/>');
-    await writeFile(path.join(directory, 'iPad Test.md'), '---\npaperlink: ' + ID + '\n---\n\n![[' + ID + '.preview.svg]]\n\nMy text\n');
-    const files = await writeObsidianFiles(file, canvas([], 'iPad Test'));
+    await writeFile(path.join(directory, 'iPad Test.md'), '---\npaperlink: ' + ID + '\n---\n\n![[' + ID + '.preview.svg]]\n\nOpen on your iPad: `paper open 8cdf569c`\n\nMy text\n');
+    const link = 'http://mac.local:8080/#canvas=' + ID;
+    const files = await writeObsidianFiles(file, canvas([], 'iPad Test'), { link });
     assert.equal(path.basename(files.note), 'iPad Test.md');
-    assert.equal(await readFile(files.note, 'utf8'), '---\npaperlink: ' + ID + '\n---\n\n![[' + ID + '.svg]]\n\nMy text\n', 'only the embed changes');
+    assert.equal(await readFile(files.note, 'utf8'), '---\npaperlink: ' + ID + '\n---\n\n![[' + ID + '.svg]]\n\n[Open in Paperlink](' + link + ')\n\nMy text\n', 'only embed and open line change');
     assert.deepEqual((await readdir(directory)).sort(), ['.obsidian', 'Paperlink Previews', 'iPad Test.md']);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

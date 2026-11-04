@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 
 async function sandbox() {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'paperlink-cli-')));
-  const env = { ...process.env, PAPERLINK_CONFIG: path.join(root, 'config', 'config.json'), PAPERLINK_LOCK_DIR: path.join(root, 'locks'), PAPERLINK_TRASH: path.join(root, 'Trash') };
+  const env = { ...process.env, PAPERLINK_CONFIG: path.join(root, 'config', 'config.json'), PAPERLINK_LOCK_DIR: path.join(root, 'locks'), PAPERLINK_TRASH: path.join(root, 'Trash'), PAPERLINK_HOST: 'paper-test.local' };
   delete env.PAPERLINK_PORT;
   const bin = path.resolve('bin/paper.js');
   // Commands run from the sandbox, so relative canvas paths land there.
@@ -66,20 +66,41 @@ test('machine interface: canvas files anywhere, background server, links and err
     assert.equal(inVault.title, 'Exercise 1 · Analysis');
     assert.equal(inVault.note, path.join(root, 'Vault', 'Module X', 'Exercise 1.md'));
     assert.match(await readFile(inVault.note, 'utf8'), new RegExp('!\\[\\[' + inVault.id + '\\.svg\\]\\]'));
+    assert.ok((await readFile(inVault.note, 'utf8')).includes('[Open in Paperlink](http://paper-test.local:' + port + '/#canvas=' + inVault.id + ')'), 'note links to the canvas');
 
     const started = await paper('start');
     assert.equal(started.running, true);
     assert.equal((await paper('start')).pid, started.pid, 'start is idempotent');
     const opened = await paper('open', 'Uni/Analysis/Sheet 3');
     assert.equal(opened.id, offline.id, 'open by path, extension optional');
-    assert.match(opened.links[0], new RegExp('#key=[a-f0-9]+&canvas=' + offline.id));
+    assert.match(opened.links[0], new RegExp('#pair=[a-f0-9]{32}&canvas=' + offline.id));
     assert.equal((await paper('open', 'exercise')).id, inVault.id, 'unique partial title match');
     assert.equal((await paper('open', offline.id.slice(0, 8))).id, offline.id, 'ID prefix match');
     await paper('new', 'Uni/Sheet 4');
     assert.match(await fails('open', 'sheet'), /matches several canvases/);
 
-    const key = opened.links[0].match(/#key=([a-f0-9]+)/)[1];
-    const request = (route, method, data) => fetch('http://127.0.0.1:' + port + route, { method, headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: data && JSON.stringify(data) });
+    // Pairing: a one-time code from a QR link becomes a lasting device token.
+    const base = 'http://127.0.0.1:' + port;
+    const code = opened.links[0].match(/#pair=([a-f0-9]+)/)[1];
+    const iPad = 'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+    const pairWith = (pairCode, deviceId) => fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': iPad }, body: JSON.stringify({ code: pairCode, deviceId }) });
+    const pairing = await (await pairWith(code)).json();
+    assert.equal(pairing.name, 'iPad · Safari');
+    assert.equal((await pairWith(code)).status, 403, 'codes work once');
+    let key = pairing.token;
+    const request = (route, method, data, token = key) => fetch(base + route, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: data && JSON.stringify(data) });
+    assert.equal((await request('/api/canvases/' + offline.id, 'GET', undefined, 'f'.repeat(64))).status, 401);
+    // Re-pairing the same browser keeps one device entry.
+    const again = await (await pairWith((await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1], pairing.deviceId)).json();
+    assert.equal(again.deviceId, pairing.deviceId);
+    assert.equal((await paper('devices')).length, 1);
+    assert.equal((await request('/api/canvases/' + offline.id, 'GET')).status, 401, 'the replaced token no longer works');
+    const second = await (await pairWith((await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1])).json();
+    assert.equal((await paper('devices')).length, 2);
+    assert.equal((await request('/api/canvases/' + offline.id, 'GET', undefined, second.token)).status, 200);
+    assert.equal((await paper('unpair', second.deviceId))[0].unpaired, second.deviceId);
+    assert.equal((await request('/api/canvases/' + offline.id, 'GET', undefined, second.token)).status, 401, 'unpairing takes effect immediately');
+    key = again.token;
     const strokes = ['M 10 10 l 0.01 0 L 30 40'];
     assert.equal((await request('/api/canvases/' + inVault.id, 'PUT', { revision: 0, operationId: 'browser-edit', strokes })).status, 200);
     assert.deepEqual((await readCanvas(inVault.path, inVault.id)).pages[0].strokes, strokes);
@@ -172,10 +193,10 @@ test('foreground serve prints connection links for scripts', async () => {
   try {
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Server startup timed out')), 5000);
-      server.stdout.on('data', data => { output += data; if (output.includes('#key=')) { clearTimeout(timer); resolve(); } });
+      server.stdout.on('data', data => { output += data; if (output.includes('#pair=')) { clearTimeout(timer); resolve(); } });
       server.once('exit', code => { clearTimeout(timer); reject(new Error('Server exited: ' + code)); });
     });
-    assert.match(output, /^Paperlink → http:\/\/localhost:18878\/#key=[a-f0-9]{48}/);
+    assert.match(output, /^Paperlink → http:\/\/localhost:18878\/#pair=[a-f0-9]{32}/);
   } finally {
     server.kill('SIGTERM');
     if (server.exitCode === null) await once(server, 'exit');

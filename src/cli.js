@@ -13,6 +13,7 @@ import { canvasBase, canvasPath, createCanvas, EXTENSION, findCanvasFiles, folde
 import { configPath, expandHome, loadConfig, saveConfig, stateDirectory, validPort } from './config.js';
 import { forget, loadRegistry, relocate, remember } from './registry.js';
 import { deleteCanvas, findMoved, moveCanvas } from './move.js';
+import { canvasLink, loadDevices, saveDevices } from './devices.js';
 import { readCanvas } from './store.js';
 import { writeObsidianFiles } from './preview.js';
 import { renderQr } from './qr.js';
@@ -107,7 +108,7 @@ function qrSection(ctx, links, label) {
   }
   if (!wantsQr(ctx)) return '  ' + device;
   return ['', '  ' + c.bold(label), ui.indent(renderQr(device), '  '),
-    '  ' + c.muted(device.split('#')[0] + ' · the code contains your access key, do not share it')].join('\n');
+    '  ' + c.muted(device.split('#')[0] + ' · one-time pairing code, valid for 15 minutes')].join('\n');
 }
 // JSON mode keeps stdout machine-readable; an explicit --qr goes to stderr.
 function jsonQr(ctx, links) {
@@ -282,7 +283,7 @@ function canvasCard(canvas, title = 'Canvas') {
 // Canvases inside an Obsidian vault get a note and a preview next to them.
 async function obsidianFiles(ctx, file, document) {
   if (!ctx.obsidian || !(await obsidianVault(file))) return null;
-  return writeObsidianFiles(file, document);
+  return writeObsidianFiles(file, document, { link: canvasLink(ctx.port, document.id) });
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -321,14 +322,14 @@ async function cmdServe(ctx) {
     c.muted('Network   ') + (ctx.lan ? 'iPad can connect' : 'this computer only'),
     c.muted('Obsidian  ') + (ctx.obsidian ? 'notes and previews in vaults' : 'off')
   ], { title: 'Server' }));
-  console.log(qrSection(ctx, server.links, 'Scan with your iPad to connect'));
+  console.log(qrSection(ctx, server.links, 'Scan once to pair your iPad'));
   console.log('\n  ' + c.muted('Keep this window open · Ctrl-C stops the server · `paper start` runs it in the background') + '\n');
 }
 
 async function cmdStart(ctx) {
   const status = await startBackground(ctx);
   jsonQr(ctx, status.links);
-  emit(ctx, status, () => ok('Paperlink is running in the background ' + c.muted('· port ' + status.port + ' · pid ' + status.pid)) + '\n' + qrSection(ctx, status.links, 'Scan with your iPad to connect'));
+  emit(ctx, status, () => ok('Paperlink is running in the background ' + c.muted('· port ' + status.port + ' · pid ' + status.pid)) + '\n' + qrSection(ctx, status.links, 'Scan once to pair your iPad'));
 }
 
 async function cmdStop(ctx) {
@@ -557,7 +558,7 @@ async function cmdPreview(ctx, positional) {
   const results = [], skipped = [];
   for (const canvas of canvases) {
     if (!(await obsidianVault(canvas.path))) { skipped.push({ id: canvas.id, title: canvas.title, path: canvas.path, reason: 'not inside an Obsidian vault' }); continue; }
-    const files = await writeObsidianFiles(canvas.path, await readCanvas(canvas.path, canvas.id));
+    const files = await writeObsidianFiles(canvas.path, await readCanvas(canvas.path, canvas.id), { link: canvasLink(ctx.port, canvas.id) });
     results.push({ id: canvas.id, title: canvas.title, path: canvas.path, ...files });
   }
   if (query && skipped.length) throw new CliError(canvases[0].title + ' is not inside an Obsidian vault.');
@@ -567,6 +568,55 @@ async function cmdPreview(ctx, positional) {
     if (!ctx.obsidian) lines.push('  ' + c.muted('Automatic updates are off. Turn them on with `paper config set obsidian true`.'));
     return '\n' + lines.join('\n');
   });
+}
+
+// ── Devices ──────────────────────────────────────────────────────────────────
+async function cmdPair(ctx) {
+  const status = await requireServer(ctx);
+  const { links } = await callServer(ctx, 'pair');
+  jsonQr(ctx, links);
+  emit(ctx, { links, lan: status.lan }, () => qrSection(ctx, links, 'Scan once with each device · links in notes then open directly'));
+}
+
+async function knownDevices() {
+  return Object.entries(await loadDevices()).map(([id, device]) => ({ id, name: device.name, pairedAt: device.pairedAt }))
+    .sort((a, b) => (b.pairedAt || '').localeCompare(a.pairedAt || ''));
+}
+
+async function cmdDevices(ctx) {
+  const devices = await knownDevices();
+  emit(ctx, devices, () => devices.length
+    ? '\n' + devices.map(device => '  ' + c.accent('▪') + ' ' + device.name + '  ' + c.muted(device.id + ' · paired ' + ago(device.pairedAt))).join('\n') + '\n'
+    : '  ' + c.muted('No paired devices. Pair one with `paper pair`.'));
+}
+
+async function cmdUnpair(ctx, positional) {
+  const devices = await knownDevices();
+  const query = positional.join(' ').toLowerCase();
+  let chosen;
+  if (ctx.flags.all) chosen = devices;
+  else if (query) {
+    chosen = devices.filter(device => device.id.startsWith(query) || device.name.toLowerCase() === query);
+    if (!chosen.length) chosen = devices.filter(device => device.name.toLowerCase().includes(query));
+    if (chosen.length > 1) {
+      if (!ctx.interactive) throw new CliError('"' + query + '" matches several devices: ' + chosen.map(device => device.id + ' (' + device.name + ')').join(', '));
+      const one = await ui.select({ message: 'Which device?', choices: chosen.map(device => ({ label: device.name, value: device, hint: device.id + ' · ' + ago(device.pairedAt) })) });
+      chosen = one ? [one] : [];
+    }
+    if (!chosen.length && !ctx.interactive) throw new CliError('No paired device matches "' + query + '". See `paper devices`.');
+  } else {
+    if (!ctx.interactive) throw new CliError('Use: paper unpair <device id|name> or --all.');
+    if (!devices.length) throw new CliError('No paired devices.');
+    const one = await ui.select({ message: 'Unpair which device?', choices: devices.map(device => ({ label: device.name, value: device, hint: device.id + ' · paired ' + ago(device.pairedAt) })) });
+    chosen = one ? [one] : [];
+  }
+  if (!chosen.length) return;
+  if (ctx.flags.all && !(await confirmed(ctx, 'Unpair all ' + chosen.length + ' devices? Each must scan a code again.'))) return;
+  const stored = await loadDevices();
+  for (const device of chosen) delete stored[device.id];
+  await saveDevices(stored);
+  await callServer(ctx, 'devices').catch(() => null);
+  emit(ctx, chosen.map(device => ({ unpaired: device.id, name: device.name })), () => chosen.map(device => ok('Unpaired ' + device.name)).join('\n'));
 }
 
 // ── Interactive home ─────────────────────────────────────────────────────────
@@ -585,7 +635,7 @@ async function home(ctx) {
         { label: 'New canvas', value: 'new', hint: 'pick a folder, scan, write' },
         { label: 'Open canvas', value: 'open', disabled: !recent.length, hint: recent.length ? 'last: ' + recent[0].title : 'none yet' },
         { label: 'All canvases', value: 'list', hint: 'open, move, delete' },
-        status ? { label: 'Show connection QR', value: 'qr' } : { label: 'Start server', value: 'start', hint: 'runs in the background' },
+        status ? { label: 'Pair a device', value: 'pair', hint: 'QR code, once per device' } : { label: 'Start server', value: 'start', hint: 'runs in the background' },
         { label: 'Import browser draft', value: 'import', disabled: !status?.drafts, hint: status ? status.drafts + ' unsaved' : 'needs the server' },
         { separator: '' },
         { label: 'Settings', value: 'settings' },
@@ -601,7 +651,7 @@ async function home(ctx) {
       if (choice === 'open') await cmdOpen(ctx, []);
       if (choice === 'list') { ui.clearScreen(); await browse(ctx); continue; }
       if (choice === 'start') await cmdStart(ctx);
-      if (choice === 'qr') console.log(qrSection(ctx, status.links, 'Scan with your iPad to connect'));
+      if (choice === 'pair') await cmdPair(ctx);
       if (choice === 'import') await cmdImport(ctx, []);
       if (choice === 'stop') await cmdStop(ctx);
       if (choice === 'settings') { await settings(ctx, status); continue; }
@@ -624,11 +674,19 @@ async function settings(ctx, status) {
         { label: 'Obsidian notes', value: 'obsidian', hint: config.obsidian ? 'on · for canvases inside a vault' : 'off' },
         { label: 'iPad & network access', value: 'lan', hint: config.lan ? 'on' : 'off · this computer only' },
         { label: 'Port', value: 'port', hint: String(config.port) },
+        { label: 'Paired devices', value: 'devices', hint: 'list and unpair' },
         { separator: '' },
         { label: 'Back', value: 'back' }
       ]
     });
     if (!choice || choice === 'back') return;
+    if (choice === 'devices') {
+      console.log();
+      await cmdDevices(ctx);
+      if ((await knownDevices()).length && await ui.confirm({ message: 'Unpair a device?', initial: false })) await cmdUnpair(ctx, []);
+      await ui.pause();
+      continue;
+    }
     let value;
     if (choice === 'obsidian') value = await ui.confirm({ message: 'Add a note and preview to canvases inside an Obsidian vault?', initial: config.obsidian });
     if (choice === 'lan') value = await ui.confirm({ message: 'Allow your iPad and other devices on this Wi-Fi to connect?', initial: config.lan });
@@ -678,6 +736,11 @@ function helpText() {
     command('status', 'is it running, on which port and links'),
     command('stop', 'stop the background server'),
     '',
+    '  ' + c.bold('Devices'),
+    command('pair', 'QR code to pair a device, once per device'),
+    command('devices', 'paired devices'),
+    command('unpair <device> | --all', 'remove a device\'s access'),
+    '',
     '  ' + c.bold('Settings'),
     command('config', 'show settings'),
     command('config set <key> <value>', 'obsidian, lan, port'),
@@ -722,6 +785,9 @@ export async function main(argv) {
       case 'move': case 'mv': return await cmdMove(ctx, rest);
       case 'delete': case 'rm': return await cmdDelete(ctx, rest);
       case 'forget': return await cmdForget(ctx, rest);
+      case 'pair': return await cmdPair(ctx);
+      case 'devices': return await cmdDevices(ctx);
+      case 'unpair': return await cmdUnpair(ctx, rest);
       case 'preview': return await cmdPreview(ctx, rest);
       case 'drafts': return await cmdDrafts(ctx);
       case 'import': return await cmdImport(ctx, rest);

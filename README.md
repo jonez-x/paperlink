@@ -2,7 +2,7 @@
 
 A self-hosted notebook for handwriting, assignments and PDF worksheets. Start it from your laptop's CLI, write with Apple Pencil in your iPad browser, and keep every canvas as a `.paperlink` file wherever you like, for example next to your notes in an Obsidian vault. An optional assistant can read a page and leave annotations.
 
-**Status:** Early prototype. Pen, stroke eraser, undo/redo, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, QR pairing and an interactive CLI are implemented. PDFs, live multi-device synchronization and AI integration are planned.
+**Status:** Early prototype. Pen, stroke eraser, undo/redo, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, device pairing with stable links and an interactive CLI are implemented. PDFs, live multi-device synchronization and AI integration are planned.
 
 ## Install
 
@@ -60,16 +60,21 @@ paper config set port 8080
 
 Canvases inside an Obsidian vault (any folder below one with `.obsidian`) automatically get two companions:
 
-- `<Name>.md`, a note that embeds the handwriting and shows the `paper open` command. It is created once and then belongs to you: rename or move it and add your own text below the embed; Paperlink never rewrites it.
+- `<Name>.md`, a note that embeds the handwriting and links to the canvas (**Open in Paperlink**, see Connecting the iPad). It is created once and then belongs to you: rename or move it and add your own text below the embed; Paperlink never rewrites it.
 - `Paperlink Previews/<id>.svg` at the vault root, the handwriting on light paper. One folder per vault keeps your folders clean; the ID keeps names unique and stable when you rename or move things. The running server refreshes it about 1.5 seconds after the last save.
 
 `paper preview` creates previews and missing notes for known canvases inside vaults (all, or `paper preview <file|id|title>`). Restart the server after changing the setting.
 
 ## Connecting the iPad
 
-With network access enabled (`lan`), `paper start`, `paper serve` and `paper canvas new|open` print a QR code. Scan it with the iPad camera; the canvas opens and saves automatically from the first stroke. The code contains a per-run access key, so do not share screenshots of it. QR codes appear in terminals; `--qr` forces and `--no-qr` hides them.
+Each device pairs once. With network access enabled (`lan`), `paper pair`, `paper start` and `paper new|open` print a QR code; scan it with the iPad camera. The page opens (with the canvas, if the code belongs to one) and the browser keeps a device key. From then on plain canvas links work on that device, including the **Open in Paperlink** link in Obsidian notes, also after server restarts.
 
-This prototype uses HTTP: use it only on a trusted network. The key stays in the browser tab session and is removed from the address bar after loading. After a server restart, scan the new code.
+- Links use the computer's network name (`<Name>.local`, from System Settings › Sharing), so they stay valid when the IP address changes. The server must be running for a link to open.
+- Pairing codes work once and expire after 15 minutes. The browser removes them from the address bar.
+- `paper devices` lists paired devices, `paper unpair <device>` (or `--all`) revokes access immediately.
+- Pairing is stored per browser and address: a browser opened through an IP address pairs separately from one opened through the network name.
+
+This prototype uses HTTP: use it only on a trusted network. QR codes appear in terminals; `--qr` forces and `--no-qr` hides them.
 
 ## Storage guarantees
 

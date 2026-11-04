@@ -338,15 +338,32 @@ let currentDocument = null;
 let pendingSave = null;
 let saving = false;
 let saveBlocked = false;
-let connectionKey = '';
+// A device pairs once with the one-time code from a QR link and keeps its
+// token in this browser, so plain canvas links (e.g. from Obsidian) work later.
+let deviceToken = '';
 const linkParameters = new URLSearchParams(location.hash.slice(1));
-const keyFromLink = linkParameters.get('key');
+const pairCode = linkParameters.get('pair');
 const canvasFromLink = linkParameters.get('canvas');
-try {
-  connectionKey = keyFromLink || sessionStorage.getItem('paperlink-key') || '';
-  if (keyFromLink) sessionStorage.setItem('paperlink-key', keyFromLink);
-} catch { connectionKey = keyFromLink || ''; }
-if (keyFromLink) history.replaceState(null, '', location.pathname);
+try { deviceToken = localStorage.getItem('paperlink-device-token') || ''; } catch {}
+if (location.hash) history.replaceState(null, '', location.pathname);
+async function pair() {
+  if (!pairCode) return;
+  let deviceId;
+  try { deviceId = localStorage.getItem('paperlink-device-id') || undefined; } catch {}
+  const response = await fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: pairCode, deviceId }) });
+  const result = await response.json();
+  // An already paired device can ignore a stale code.
+  if (!response.ok) { if (deviceToken) return; throw new Error(result.error); }
+  deviceToken = result.token;
+  try {
+    localStorage.setItem('paperlink-device-token', result.token);
+    localStorage.setItem('paperlink-device-id', result.deviceId);
+  } catch { report('This browser cannot store the pairing. Allow website data and scan again.', true); }
+}
+const paired = pair().catch(error => {
+  report(error.message, true);
+  document.querySelector('#storage-info').showPopover();
+});
 function report(message, error = false) {
   connectionStatus.textContent = message;
   connectionStatus.dataset.error = String(error);
@@ -359,7 +376,7 @@ function operationId() {
 async function api(route, options = {}) {
   const response = await fetch(route.startsWith('/drafts/') ? '/api' + route : '/api/canvases' + route, {
     ...options,
-    headers: { Authorization: 'Bearer ' + connectionKey, 'Content-Type': 'application/json' }
+    headers: { Authorization: 'Bearer ' + deviceToken, 'Content-Type': 'application/json' }
   });
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status });
@@ -440,8 +457,8 @@ try { previouslyOpen ||= sessionStorage.getItem('paperlink-open-canvas'); } catc
 let loading = Boolean(previouslyOpen);
 if (previouslyOpen) {
   sheet.style.pointerEvents = 'none';
-  openCanvas(previouslyOpen).catch(error => {
-    report(error.message + ' Open a fresh canvas link from the CLI.', true);
+  paired.then(() => openCanvas(previouslyOpen)).catch(error => {
+    report(error.message, true);
     document.querySelector('#storage-info').showPopover();
   }).finally(() => { loading = false; sheet.style.pointerEvents = ''; });
 }
@@ -453,7 +470,7 @@ try {
 } catch { browserDraftId = operationId(); }
 let polling = false;
 async function publishDraft() {
-  if (!connectionKey || loading || polling || active !== null || (currentDocument && !saveBlocked)) return;
+  if (!deviceToken || loading || polling || active !== null || (currentDocument && !saveBlocked)) return;
   polling = true;
   try {
     const result = await api('/drafts/' + browserDraftId, { method: 'PUT', body: JSON.stringify({ strokes: strokes.slice() }) });
