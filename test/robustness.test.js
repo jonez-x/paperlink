@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readdir, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readdir, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { createCanvas, documentFolder, listCanvases } from '../src/documents.js';
+import { createCanvas, findCanvasFiles } from '../src/documents.js';
+import { readCanvas } from '../src/store.js';
 import { acquireFolderLock } from '../src/lock.js';
 import { DraftStore } from '../src/drafts.js';
 
@@ -14,7 +15,8 @@ test('folder lock lives outside the vault, blocks a live owner and replaces stal
   const vault = await mkdtemp(path.join(tmpdir(), 'paperlink-lock-'));
   process.env.PAPERLINK_LOCK_DIR = await mkdtemp(path.join(tmpdir(), 'paperlink-locks-'));
   try {
-    const directory = await documentFolder(vault, 'Canvases');
+    const directory = path.join(vault, 'Canvases');
+    await mkdir(directory);
     const lock = await acquireFolderLock(directory);
     assert.deepEqual(await readdir(directory), [], 'no lock file inside the vault');
     await assert.rejects(acquireFolderLock(directory), /already served by process/);
@@ -42,20 +44,20 @@ test('folder lock lives outside the vault, blocks a live owner and replaces stal
   }
 });
 
-test('listing skips damaged files and sync conflict copies', async () => {
-  const vault = await mkdtemp(path.join(tmpdir(), 'paperlink-list-'));
+test('canvas discovery skips hidden folders and readers reject damaged files', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'paperlink-list-'));
   try {
-    const good = await createCanvas(vault, 'Notes', 'Good');
-    const directory = path.dirname(good.path);
-    await writeFile(path.join(directory, good.id.replace(/.$/, last => last === '0' ? '1' : '0') + '.paperlink.json'), '{"broken');
-    await writeFile(path.join(directory, good.id + ' 2.paperlink.json'), JSON.stringify({ ...good, path: undefined }));
-    const mismatched = '00000000-0000-0000-0000-000000000000';
-    await writeFile(path.join(directory, mismatched + '.paperlink.json'), JSON.stringify({ ...good, path: undefined }));
-    const skipped = [];
-    const list = await listCanvases(vault, 'Notes', { onSkip: entry => skipped.push(entry) });
-    assert.deepEqual(list.map(entry => entry.id), [good.id]);
-    assert.equal(skipped.length, 3);
-  } finally { await rm(vault, { recursive: true, force: true }); }
+    const good = await createCanvas(path.join(root, 'Notes', 'Good.paperlink'));
+    await createCanvas(path.join(root, '.trash', 'Deleted.paperlink'));
+    const broken = path.join(root, 'Notes', 'Broken.paperlink');
+    await writeFile(broken, '{"broken');
+    const noPages = path.join(root, 'Notes', 'No pages.paperlink');
+    await writeFile(noPages, JSON.stringify({ ...good, path: undefined, pages: undefined }));
+    assert.deepEqual((await findCanvasFiles(root)).map(file => path.basename(file)).sort(), ['Broken.paperlink', 'Good.paperlink', 'No pages.paperlink']);
+    await assert.rejects(readCanvas(broken), /invalid JSON/);
+    await assert.rejects(readCanvas(noPages), /Unsupported document format/);
+    assert.equal((await readCanvas(good.path)).id, good.id);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('draft store bounds memory, frees imported drafts and expires idle ones', () => {

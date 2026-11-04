@@ -1,11 +1,14 @@
-import { open, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, open, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { canvasBase, safeFileName } from './documents.js';
 
-// Obsidian output (opt-in): next to each <id>.paperlink.json the library gets
-//   <id>.preview.svg  – the handwriting on light paper, refreshed after saves
-//   <Title>.md        – a note embedding the preview, created once and then left
-//                       to the user, so their own text below the embed survives.
+// Inside an Obsidian vault, "<Name>.paperlink" gets two companions:
+//   <id>.preview.svg – the handwriting on light paper, refreshed after saves.
+//                      Named by ID, so renames never break the embed and two
+//                      "Sheet 1" canvases in different folders never collide.
+//   <Name>.md        – a note embedding the preview, created once and then left
+//                      to the user, so their own text below the embed survives.
 
 const PAPER = '#fffdf5';
 const INK = '#24231f';
@@ -66,27 +69,57 @@ async function replaceFile(filename, content) {
   } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
-export async function writePreview(directory, document) {
-  const filename = path.join(directory, previewName(document.id));
+export async function writePreview(file, document) {
+  const filename = path.join(path.dirname(file), previewName(document.id));
   await replaceFile(filename, renderPreview(document));
   return filename;
 }
 
-const noteName = title => title.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '') || 'Canvas';
 const FRONTMATTER_ID = /^---\r?\n(?:.*\r?\n)*?paperlink: *([a-f0-9-]{36}) *\r?\n/;
+
+async function noteId(filename) {
+  const head = (await readFile(filename, 'utf8').catch(() => '')).slice(0, 512);
+  return FRONTMATTER_ID.exec(head)?.[1];
+}
 
 // Finds the note for a canvas in its folder, even after the user renamed it.
 export async function findNote(directory, id) {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  let entries;
+  try { entries = await readdir(directory, { withFileTypes: true }); } catch { return null; }
+  for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-    const filename = path.join(directory, entry.name);
-    const head = (await readFile(filename, 'utf8').catch(() => '')).slice(0, 512);
-    if (FRONTMATTER_ID.exec(head)?.[1] === id) return filename;
+    if (await noteId(path.join(directory, entry.name)) === id) return path.join(directory, entry.name);
   }
   return null;
 }
 
-export async function ensureNote(directory, document) {
+// Searches a whole vault, for notes the user moved in Obsidian.
+export async function findNoteInVault(vault, id, depth = 0) {
+  let entries;
+  try { entries = await readdir(vault, { withFileTypes: true }); } catch { return null; }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const full = path.join(vault, entry.name);
+    if (entry.isFile() && entry.name.endsWith('.md') && await noteId(full) === id) return full;
+    if (entry.isDirectory() && depth < 16) {
+      const found = await findNoteInVault(full, id, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// "Sheet.md", or "Sheet (2).md" when that is taken.
+export async function freeName(directory, base, extension, taken = name => access(name).then(() => true, () => false)) {
+  for (let attempt = 1; attempt < 100; attempt++) {
+    const filename = path.join(directory, base + (attempt > 1 ? ' (' + attempt + ')' : '') + extension);
+    if (!(await taken(filename))) return filename;
+  }
+  throw new Error('Cannot find a free name for ' + base + extension + ' in ' + directory + '.');
+}
+
+export async function ensureNote(file, document) {
+  const directory = path.dirname(file);
   const existing = await findNote(directory, document.id);
   if (existing) return { path: existing, created: false };
   const content = [
@@ -94,7 +127,8 @@ export async function ensureNote(directory, document) {
     '![[' + previewName(document.id) + ']]', '',
     'Open on your iPad: `paper open ' + document.id.slice(0, 8) + '`', ''
   ].join('\n');
-  const base = noteName(document.title);
+  // Files from earlier versions are named by ID; their note takes the title.
+  const base = safeFileName(/^[a-f0-9-]{36}$/.test(canvasBase(file)) ? document.title : canvasBase(file));
   for (let attempt = 1; attempt < 100; attempt++) {
     const filename = path.join(directory, base + (attempt > 1 ? ' (' + attempt + ')' : '') + '.md');
     try {
@@ -106,8 +140,8 @@ export async function ensureNote(directory, document) {
 }
 
 // Preview and note together, for canvases created or refreshed through the CLI.
-export async function writeObsidianFiles(directory, document) {
-  const preview = await writePreview(directory, document);
-  const note = await ensureNote(directory, document);
+export async function writeObsidianFiles(file, document) {
+  const preview = await writePreview(file, document);
+  const note = await ensureNote(file, document);
   return { preview, note: note.path, noteCreated: note.created };
 }

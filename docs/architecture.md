@@ -4,7 +4,7 @@ The browser, CLI and optional MCP adapter share the local server's document oper
 
 ## Documents and Obsidian
 
-Each canvas lives at a user-selected location in the vault. The initial storage proposal includes a Markdown entry with an embedded preview and browser link, a versioned Paperlink document with stable document/page/object IDs, and relatively referenced assets for the original PDF and preview.
+Each canvas is a versioned `.paperlink` file with stable document/page/object IDs at a user-selected location, often inside an Obsidian vault. Inside a vault, a Markdown note with an embedded preview accompanies it. The original PDF and other assets will be referenced relatively.
 
 Store PDF backgrounds separately from strokes. Page coordinates remain independent of zoom and viewport size. Text and AI annotations are separate objects. Refresh previews after confirmed changes. Identify documents by ID and move related files together through the CLI. Test moves through Obsidian and file managers before general release. Native Obsidian Canvas compatibility and an embedded Obsidian editor are later integrations.
 
@@ -12,14 +12,13 @@ The server performs atomic writes and is authoritative during editing. Every cha
 
 ## Proposed CLI
 
-The prototype implements `serve` and `canvas create/list/open/drafts/import --vault <root> --path <folder>`. Other commands describe the target interface. Canvas management and draft imports run through the CLI. The browser follows a canvas link and autosaves; no browser file-management menu is provided.
+The prototype implements `new/open/list/forget/preview/drafts/import` on canvas files plus `start/serve/stop/status/config`. A canvas is a `.paperlink` file anywhere; there is no configured storage root. Other commands below describe the target interface. Canvas management and draft imports run through the CLI. The browser follows a canvas link and autosaves; no browser file-management menu is provided.
 
 ```sh
-paper init --vault ~/Documents/MyVault
 paper serve --port 8080 --lan
-paper canvas create "Exercise 4" --path "University/Math"
-paper canvas list --json
-paper canvas open <canvas-id>
+paper new "University/Math/Exercise 4"
+paper list --json
+paper open <file|canvas-id>
 paper canvas import-pdf <canvas-id> Worksheet.pdf
 paper page inspect <page-id> --json
 paper page snapshot <page-id> --output /tmp/page.png
@@ -28,7 +27,7 @@ paper canvas export <canvas-id> --pdf --output Assignment.pdf
 paper mcp
 ```
 
-One server manages multiple documents. Ports and storage roots are configurable. Separate instances may use separate ports. The first version should prevent multiple servers from writing the same document store. Agents receive stable IDs, JSON output, actionable errors and concise command documentation. Annotations use page coordinates and appear in connected browsers. Paths remain confined to the configured document root.
+One server manages multiple documents. One server per user serves every canvas the local CLI has created or opened; a lock prevents a second server. Agents receive stable IDs, JSON output, actionable errors and concise command documentation. Annotations use page coordinates and appear in connected browsers. Devices reach only canvases on the CLI's list, never arbitrary paths.
 
 ## Assistant interaction and triggers
 

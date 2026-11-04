@@ -3,17 +3,19 @@
 //   scripts and AI agents: commands with flags, JSON on stdout when not in a
 //   terminal (or with --json), errors as JSON on stderr and a non-zero exit code.
 import { spawn } from 'node:child_process';
-import { closeSync, openSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { mkdir, realpath, stat } from 'node:fs/promises';
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from './server.js';
-import { createCanvas, listCanvases, listFolders } from './documents.js';
+import { canvasBase, canvasPath, createCanvas, EXTENSION, findCanvasFiles, folderEntries, isCanvasFile, obsidianVault, safeFileName } from './documents.js';
 import { configPath, expandHome, loadConfig, saveConfig, stateDirectory, validPort } from './config.js';
-import { renderQr } from './qr.js';
+import { forget, loadRegistry, relocate, remember } from './registry.js';
+import { findMoved, moveCanvas } from './move.js';
 import { readCanvas } from './store.js';
 import { writeObsidianFiles } from './preview.js';
+import { renderQr } from './qr.js';
 import * as ui from './tui.js';
 
 const { c } = ui;
@@ -24,7 +26,7 @@ class CliError extends Error {}
 
 // ── Arguments ────────────────────────────────────────────────────────────────
 const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start']);
-const VALUE_FLAGS = new Set(['port', 'library', 'vault', 'path', 'from-browser', 'title', 'default-path']);
+const VALUE_FLAGS = new Set(['port', 'title', 'from-browser']);
 
 export function parseArguments(argv) {
   const flags = {};
@@ -36,6 +38,7 @@ export function parseArguments(argv) {
     if (!argument.startsWith('--')) { positional.push(argument); continue; }
     const [name, inline] = argument.slice(2).split(/=(.*)/s);
     if (BOOLEAN_FLAGS.has(name)) { flags[name] = true; continue; }
+    if (['library', 'vault', 'path', 'default-path'].includes(name)) throw new CliError('--' + name + ' is gone: canvases are plain files now. Pass the file path instead, e.g. paper new "Uni/Sheet 3".');
     if (!VALUE_FLAGS.has(name)) throw new CliError('Unknown option --' + name + '. See `paper help`.');
     const value = inline ?? argv[++i];
     if (value === undefined || (inline === undefined && value.startsWith('--'))) throw new CliError('Missing value for --' + name + '.');
@@ -44,29 +47,28 @@ export function parseArguments(argv) {
   return { flags, positional };
 }
 
+// Earlier versions kept canvases in one configured "library". Its canvases are
+// adopted into the list of known canvases once, then the setting is dropped.
+async function migrateLibrary(config) {
+  if (!config.library) return config;
+  const adopted = [];
+  for (const file of await findCanvasFiles(config.library)) {
+    try { const document = await readCanvas(file); adopted.push({ id: document.id, title: document.title, path: file }); } catch { /* skip damaged files */ }
+  }
+  if (adopted.length) await remember(adopted);
+  return saveConfig({ ...config, obsidian: true });
+}
+
 async function context(flags) {
-  const config = await loadConfig();
-  const libraryInput = flags.library ?? flags.vault ?? process.env.PAPERLINK_LIBRARY ?? config.library;
+  const config = await migrateLibrary(await loadConfig());
   return {
     flags, config,
-    libraryInput: libraryInput ? expandHome(libraryInput) : null,
     port: validPort(flags.port ?? process.env.PAPERLINK_PORT ?? config.port),
     lan: flags.lan ? true : flags['no-lan'] ? false : config.lan,
     obsidian: flags.obsidian ? true : flags['no-obsidian'] ? false : config.obsidian,
     json: Boolean(flags.json) || !process.stdout.isTTY,
     interactive: !flags.json && ui.isInteractive()
   };
-}
-
-async function requireLibrary(ctx) {
-  if (!ctx.libraryInput) throw new CliError('No library configured. Run `paper init <folder>` or pass --library <folder>.');
-  try {
-    const library = await realpath(ctx.libraryInput);
-    if (!(await stat(library)).isDirectory()) throw new Error();
-    return library;
-  } catch {
-    throw new CliError('Library folder not found: ' + ctx.libraryInput);
-  }
 }
 
 // ── Output ───────────────────────────────────────────────────────────────────
@@ -78,13 +80,12 @@ function emit(ctx, data, pretty) {
 function prettyPath(absolute) {
   if (!absolute) return c.muted('not set');
   const obsidian = path.join(homedir(), 'Library/Mobile Documents/iCloud~md~obsidian/Documents');
-  if (absolute.startsWith(obsidian + path.sep)) return 'iCloud › Obsidian › ' + absolute.slice(obsidian.length + 1).split(path.sep).join(' › ');
+  if (absolute.startsWith(obsidian + path.sep)) return 'Obsidian › ' + absolute.slice(obsidian.length + 1).split(path.sep).join(' › ');
   const icloud = path.join(homedir(), 'Library/Mobile Documents/com~apple~CloudDocs');
   if (absolute.startsWith(icloud + path.sep)) return 'iCloud Drive › ' + absolute.slice(icloud.length + 1).split(path.sep).join(' › ');
   return absolute.startsWith(homedir() + path.sep) ? '~/' + absolute.slice(homedir().length + 1) : absolute;
 }
-const tilde = absolute => absolute.startsWith(homedir() + path.sep) ? '~/' + absolute.slice(homedir().length + 1) : absolute;
-const prettyFolder = folder => !folder || folder === '.' ? c.muted('(library root)') : folder.split(path.sep).join(' › ');
+const plain = text => String(text).replace(/\x1b\[[0-9;]*m/g, '');
 
 function ago(iso) {
   if (!iso) return '';
@@ -117,12 +118,12 @@ function jsonQr(ctx, links) {
 const ok = text => '  ' + c.green('✓') + ' ' + text;
 
 // ── Server control ───────────────────────────────────────────────────────────
-async function callServer(ctx, library, command, payload = {}) {
+async function callServer(ctx, command, payload = {}) {
   let response;
   try {
     response = await fetch('http://127.0.0.1:' + ctx.port + '/cli/' + command, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library, ...payload }), signal: AbortSignal.timeout(5000)
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(5000)
     });
   } catch { return null; }
   const result = await response.json().catch(() => ({ error: 'Port ' + ctx.port + ' is used by another program.' }));
@@ -130,23 +131,23 @@ async function callServer(ctx, library, command, payload = {}) {
   return result;
 }
 
-async function requireServer(ctx, library) {
-  const status = await callServer(ctx, library, 'status');
+async function requireServer(ctx) {
+  const status = await callServer(ctx, 'status');
   if (status) return status;
   if (ctx.interactive && !ctx.flags['no-start']) {
     const start = await ui.confirm({ message: 'Paperlink is not running. Start it now?' });
-    if (start) return startBackground(ctx, library);
+    if (start) return startBackground(ctx);
   }
   throw new CliError('Paperlink is not running. Start it with `paper start`.');
 }
 
-async function startBackground(ctx, library) {
-  const existing = await callServer(ctx, library, 'status');
+async function startBackground(ctx) {
+  const existing = await callServer(ctx, 'status');
   if (existing) return existing;
   await mkdir(stateDirectory(), { recursive: true });
   const logFile = path.join(stateDirectory(), 'server.log');
   const log = openSync(logFile, 'a');
-  const child = spawn(process.execPath, [BIN, 'serve', '--library', library, '--port', String(ctx.port), ctx.lan ? '--lan' : '--no-lan', ctx.obsidian ? '--obsidian' : '--no-obsidian', '--no-qr'], {
+  const child = spawn(process.execPath, [BIN, 'serve', '--port', String(ctx.port), ctx.lan ? '--lan' : '--no-lan', ctx.obsidian ? '--obsidian' : '--no-obsidian', '--no-qr'], {
     detached: true, stdio: ['ignore', log, log], env: { ...process.env, PAPERLINK_BACKGROUND: '1' }
   });
   closeSync(log);
@@ -155,11 +156,62 @@ async function startBackground(ctx, library) {
   child.unref();
   for (let waited = 0; waited < 8000 && !exited; waited += 150) {
     await new Promise(resolve => setTimeout(resolve, 150));
-    const status = await callServer(ctx, library, 'status');
+    const status = await callServer(ctx, 'status');
     if (status) return status;
   }
   const tail = readFileSync(logFile, 'utf8').trim().split('\n').slice(-3).join(' ');
   throw new CliError('The server did not start. ' + (tail || 'See ' + logFile));
+}
+
+// ── Known canvases ───────────────────────────────────────────────────────────
+// Canvases moved outside Paperlink are looked for by ID and the list is updated.
+async function knownCanvases() {
+  const canvases = [];
+  for (const [id, entry] of Object.entries(await loadRegistry())) {
+    let file = entry.path;
+    if (!existsSync(file)) {
+      const found = await findMoved(id, file);
+      if (found) { file = found; await relocate(id, found); }
+    }
+    canvases.push({ id, title: entry.title, path: file, openedAt: entry.openedAt, missing: !existsSync(file) });
+  }
+  return canvases.sort((a, b) => (b.openedAt || '').localeCompare(a.openedAt || ''));
+}
+
+// A query is a file path first, then an ID, ID prefix or title of a known canvas.
+async function findCanvas(ctx, query, { allowMissing = false } = {}) {
+  if (!query) {
+    if (!ctx.interactive) throw new CliError('Specify a canvas file, ID or title.');
+    const known = (await knownCanvases()).filter(canvas => allowMissing || !canvas.missing);
+    if (!known.length) throw new CliError('No canvases yet. Create one with `paper new`.');
+    return ui.select({
+      message: 'Which canvas?',
+      choices: known.map(canvas => ({ label: canvas.title, value: canvas, hint: plain(prettyPath(path.dirname(canvas.path))) + ' · ' + ago(canvas.openedAt) }))
+    });
+  }
+  for (const candidate of [path.resolve(expandHome(query)), canvasPath(expandHome(query))]) {
+    if (!isCanvasFile(candidate) || !existsSync(candidate)) continue;
+    const document = await readCanvas(candidate);
+    return { id: document.id, title: document.title, path: candidate };
+  }
+  const known = await knownCanvases();
+  const lower = query.toLowerCase();
+  const groups = [
+    known.filter(canvas => canvas.id === query),
+    query.length >= 4 ? known.filter(canvas => canvas.id.startsWith(lower)) : [],
+    known.filter(canvas => canvas.title.toLowerCase() === lower),
+    known.filter(canvas => canvas.title.toLowerCase().includes(lower))
+  ];
+  let match = groups.find(group => group.length === 1)?.[0];
+  if (!match) {
+    const candidates = [...new Set(groups.flat())];
+    if (!candidates.length) throw new CliError('No canvas file or known canvas matches "' + query + '". See `paper list`.');
+    if (!ctx.interactive) throw new CliError('"' + query + '" matches several canvases: ' + candidates.map(canvas => canvas.id + ' (' + canvas.path + ')').join(', '));
+    match = await ui.select({ message: 'Several canvases match. Which one?', choices: candidates.map(canvas => ({ label: canvas.title, value: canvas, hint: plain(prettyPath(canvas.path)) })) });
+    if (!match) return null;
+  }
+  if (match.missing && !allowMissing) throw new CliError('"' + match.title + '" is no longer at ' + match.path + '. If you moved it, open it by its new path: paper open "<file>".');
+  return match;
 }
 
 // ── Interactive helpers ──────────────────────────────────────────────────────
@@ -181,22 +233,32 @@ function completeDirectory(value) {
   return value?.startsWith('~') && completed.startsWith(homedir()) ? '~' + completed.slice(homedir().length) : completed;
 }
 
-async function pickFolder(library, start = '.') {
-  let current = path.normalize(start || '.');
+// Browse the file system, starting in the current folder; recent canvas
+// folders are one step away.
+async function pickFolder(start = process.cwd(), action = 'Create here') {
+  const recent = [...new Set((await knownCanvases()).filter(canvas => !canvas.missing).map(canvas => path.dirname(canvas.path)))].slice(0, 3);
+  let current = path.resolve(start);
   for (;;) {
-    const subfolders = await listFolders(library, current);
+    const { folders, canvases } = await folderEntries(current);
+    const vault = await obsidianVault(path.join(current, 'x'));
     const choices = [
-      { label: '✓ Save here', value: { save: true }, hint: current === '.' ? 'library root' : current },
+      { label: '✓ ' + action, value: { save: true }, hint: vault ? 'Obsidian vault · a note is added' : '' },
       { label: '+ New folder…', value: { create: true } },
-      ...(current !== '.' ? [{ label: '↩ Up one level', value: { up: true } }] : []),
-      ...(subfolders.length ? [{ separator: 'Folders' }] : []),
-      ...subfolders.map(name => ({ label: '▸ ' + name, value: { enter: name } }))
+      { label: '… Type a path', value: { type: true } },
+      ...(path.dirname(current) !== current ? [{ label: '↩ Up one level', value: { enter: path.dirname(current) } }] : []),
+      ...(recent.filter(folder => folder !== current).length ? [{ separator: 'Recent' }] : []),
+      ...recent.filter(folder => folder !== current).map(folder => ({ label: '★ ' + plain(prettyPath(folder)), value: { enter: folder } })),
+      ...(folders.length ? [{ separator: 'Folders' + (canvases.length ? c.muted(' · ' + canvases.length + ' canvas' + (canvases.length === 1 ? '' : 'es') + ' here') : '') }] : []),
+      ...folders.map(name => ({ label: '▸ ' + name, value: { enter: path.join(current, name) } }))
     ];
-    const choice = await ui.select({ message: 'Folder  ' + c.muted(current === '.' ? '/' : '/' + current.split(path.sep).join('/')), choices, quiet: true });
+    const choice = await ui.select({ message: 'Folder  ' + c.muted(plain(prettyPath(current))), choices, quiet: true });
     if (!choice) return null;
-    if (choice.save) { console.log(ok('Folder ' + c.muted('· ' + prettyFolder(current)))); return current; }
-    if (choice.up) current = path.dirname(current);
-    if (choice.enter) current = path.join(current, choice.enter);
+    if (choice.save) { console.log(ok('Folder ' + c.muted('· ' + plain(prettyPath(current))))); return current; }
+    if (choice.enter) current = choice.enter;
+    if (choice.type) {
+      const answer = await ui.input({ message: 'Folder', initial: plain(prettyPath(current)).startsWith('~') ? plain(prettyPath(current)) + '/' : current + '/', complete: completeDirectory });
+      if (answer) current = path.resolve(expandHome(answer));
+    }
     if (choice.create) {
       const name = await ui.input({
         message: 'New folder name',
@@ -210,110 +272,42 @@ async function pickFolder(library, start = '.') {
 function canvasCard(canvas, title = 'Canvas') {
   return ui.card([
     c.bold(canvas.title),
-    c.muted('Folder  ') + prettyFolder(canvas.folder),
-    c.muted('ID      ') + canvas.id
+    c.muted('File  ') + prettyPath(canvas.path),
+    c.muted('ID    ') + canvas.id
   ], { title });
 }
 
+// Canvases inside an Obsidian vault get a note and a preview next to them.
+async function obsidianFiles(ctx, file, document) {
+  if (!ctx.obsidian || !(await obsidianVault(file))) return null;
+  return writeObsidianFiles(file, document);
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────────
-async function cmdInit(ctx, positional) {
-  const target = positional[0] ?? ctx.flags.library ?? ctx.flags.vault;
-  if (!target) {
-    if (ctx.interactive) return setupWizard(ctx);
-    throw new CliError('Specify a library folder: paper init <folder> [--default-path FOLDER] [--obsidian] [--lan].');
-  }
-  let library;
-  try { library = await realpath(expandHome(target)); } catch { throw new CliError('Folder not found: ' + target); }
-  const config = await saveConfig({
-    ...ctx.config, library,
-    defaultPath: ctx.flags['default-path'] ?? ctx.config.defaultPath,
-    obsidian: ctx.flags.obsidian ? true : ctx.flags['no-obsidian'] ? false : ctx.config.obsidian,
-    lan: ctx.flags.lan ? true : ctx.flags['no-lan'] ? false : ctx.config.lan,
-    port: ctx.flags.port ? validPort(ctx.flags.port) : ctx.config.port
-  });
-  emit(ctx, { config, configPath: configPath() }, () => ok('Library set to ' + prettyPath(library)));
-}
-
-async function setupWizard(ctx) {
-  ui.clearScreen();
-  console.log(ui.banner());
-  console.log(ui.card([
-    'Paperlink keeps every canvas as a file in a folder you choose,',
-    'your "library". Any folder works; an Obsidian vault is one option.'
-  ], { title: 'Setup' }) + '\n');
-  let library;
-  for (;;) {
-    const answer = await ui.input({
-      message: 'Library folder', initial: ctx.config.library ? tilde(ctx.config.library) : '~/Documents/Paperlink',
-      complete: completeDirectory, validate: value => value ? '' : 'Enter a folder.'
-    });
-    if (answer === null) return;
-    const expanded = path.resolve(expandHome(answer));
-    try {
-      if ((await stat(expanded)).isDirectory()) { library = await realpath(expanded); break; }
-      console.log('  ' + c.danger('✗ That is a file, not a folder.'));
-    } catch {
-      if (await ui.confirm({ message: 'Create ' + prettyPath(expanded) + '?' })) {
-        await mkdir(expanded, { recursive: true });
-        library = await realpath(expanded);
-        break;
-      }
-    }
-  }
-  const looksLikeObsidian = (() => { try { return statSync(path.join(library, '.obsidian')).isDirectory(); } catch { return false; } })();
-  const obsidian = await ui.confirm({
-    message: looksLikeObsidian ? 'This is an Obsidian vault. Add Markdown previews for Obsidian?' : 'Add Markdown previews for Obsidian?',
-    initial: looksLikeObsidian
-  });
-  if (obsidian === null) return;
-  console.log('  ' + c.muted('Choose where new canvases go by default.'));
-  const defaultPath = await pickFolder(library, ctx.config.library === library ? ctx.config.defaultPath : '.');
-  if (defaultPath === null) return;
-  const lan = await ui.confirm({ message: 'Allow your iPad and other devices on this Wi-Fi to connect?', initial: true });
-  if (lan === null) return;
-  await saveConfig({ ...ctx.config, library, defaultPath, obsidian, lan });
-  console.log('\n' + ui.card([
-    c.muted('Library   ') + prettyPath(library),
-    c.muted('Saves to  ') + prettyFolder(defaultPath),
-    c.muted('Obsidian  ') + (obsidian ? 'previews on' : 'off'),
-    c.muted('Network   ') + (lan ? 'iPad can connect' : 'this computer only')
-  ], { title: 'All set', tone: c.green }));
-  console.log('  ' + c.muted('Saved to ' + configPath()) + '\n');
-}
-
-const RESTART_KEYS = ['lan', 'port', 'library', 'obsidian'];
+const RESTART_KEYS = ['lan', 'port', 'obsidian'];
 
 async function cmdConfig(ctx, positional) {
   const [action, key, ...rest] = positional;
   if (!action || action === 'show') {
     return emit(ctx, { ...ctx.config, configPath: configPath() }, () => ui.card([
-      c.muted('library      ') + prettyPath(ctx.config.library),
-      c.muted('defaultPath  ') + prettyFolder(ctx.config.defaultPath),
-      c.muted('obsidian     ') + ctx.config.obsidian,
-      c.muted('lan          ') + ctx.config.lan,
-      c.muted('port         ') + ctx.config.port,
+      c.muted('obsidian  ') + ctx.config.obsidian + c.muted('  · notes for canvases inside a vault'),
+      c.muted('lan       ') + ctx.config.lan + c.muted('  · iPad and other devices may connect'),
+      c.muted('port      ') + ctx.config.port,
       '', c.muted(configPath())
     ], { title: 'Config' }));
   }
-  if (action !== 'set' || !key || !rest.length) throw new CliError('Use `paper config`, or `paper config set <library|defaultPath|obsidian|lan|port> <value>`.');
+  if (action !== 'set' || !key || !rest.length) throw new CliError('Use `paper config`, or `paper config set <obsidian|lan|port> <value>`.');
   const value = rest.join(' ');
   const parseBoolean = text => { if (/^(true|on|yes|1)$/i.test(text)) return true; if (/^(false|off|no|0)$/i.test(text)) return false; throw new CliError(key + ' must be true or false.'); };
-  const update = {
-    library: async () => { try { return await realpath(expandHome(value)); } catch { throw new CliError('Folder not found: ' + value); } },
-    defaultPath: async () => { if (path.isAbsolute(value) || path.normalize(value).startsWith('..')) throw new CliError('defaultPath is relative to the library.'); return path.normalize(value); },
-    obsidian: async () => parseBoolean(value),
-    lan: async () => parseBoolean(value),
-    port: async () => validPort(value)
-  }[key];
-  if (!update) throw new CliError('Unknown setting ' + key + '. Use library, defaultPath, obsidian, lan or port.');
-  const config = await saveConfig({ ...ctx.config, [key]: await update() });
+  const update = { obsidian: parseBoolean, lan: parseBoolean, port: validPort }[key];
+  if (!update) throw new CliError('Unknown setting ' + key + '. Use obsidian, lan or port.');
+  const config = await saveConfig({ ...ctx.config, [key]: update(value) });
   emit(ctx, { ...config, configPath: configPath() }, () => ok(key + ' = ' + config[key] + (RESTART_KEYS.includes(key) ? c.muted('  · restart the server to apply') : '')) +
     (key === 'obsidian' && config.obsidian ? '\n  ' + c.muted('Run `paper preview` to add notes for existing canvases.') : ''));
 }
 
 async function cmdServe(ctx) {
-  const library = ctx.libraryInput ? await requireLibrary(ctx) : null;
-  const server = await serve({ port: ctx.port, lan: ctx.lan, obsidian: ctx.obsidian, library });
+  const server = await serve({ port: ctx.port, lan: ctx.lan, obsidian: ctx.obsidian });
   if (!process.stdout.isTTY || process.env.PAPERLINK_BACKGROUND) {
     console.log('Paperlink → ' + server.links[0]);
     for (const link of server.links.slice(1)) console.log('Device link → ' + link);
@@ -322,163 +316,175 @@ async function cmdServe(ctx) {
   console.log(ui.banner());
   console.log(ui.card([
     c.green('●') + ' running on port ' + ctx.port,
-    c.muted('Library   ') + prettyPath(library),
     c.muted('Network   ') + (ctx.lan ? 'iPad can connect' : 'this computer only'),
-    c.muted('Obsidian  ') + (ctx.obsidian ? 'previews on' : 'off')
+    c.muted('Obsidian  ') + (ctx.obsidian ? 'notes and previews in vaults' : 'off')
   ], { title: 'Server' }));
   console.log(qrSection(ctx, server.links, 'Scan with your iPad to connect'));
   console.log('\n  ' + c.muted('Keep this window open · Ctrl-C stops the server · `paper start` runs it in the background') + '\n');
 }
 
 async function cmdStart(ctx) {
-  const library = await requireLibrary(ctx);
-  const status = await startBackground(ctx, library);
+  const status = await startBackground(ctx);
   jsonQr(ctx, status.links);
   emit(ctx, status, () => ok('Paperlink is running in the background ' + c.muted('· port ' + status.port + ' · pid ' + status.pid)) + '\n' + qrSection(ctx, status.links, 'Scan with your iPad to connect'));
 }
 
 async function cmdStop(ctx) {
-  const library = await requireLibrary(ctx);
-  const result = await callServer(ctx, library, 'stop', { anyLibrary: true });
+  // `anyLibrary` lets servers of the earlier library-based version stop too.
+  const result = await callServer(ctx, 'stop', { anyLibrary: true });
   emit(ctx, { running: false, stopped: Boolean(result) }, () => result ? ok('Server stopped') : '  ' + c.muted('Paperlink was not running.'));
 }
 
 async function cmdStatus(ctx) {
-  const library = await requireLibrary(ctx);
-  const status = await callServer(ctx, library, 'status', { anyLibrary: true });
-  const otherLibrary = status && status.library !== library ? status.library : null;
-  emit(ctx, status ? { ...status, configuredLibrary: library } : { running: false, library, port: ctx.port }, () => statusCard(ctx, library, status) +
-    (otherLibrary ? '\n  ' + c.danger('! ') + c.muted('The server still uses ' + prettyPath(otherLibrary) + '. Restart it with `paper stop` and `paper start`.') : ''));
+  const status = await callServer(ctx, 'status');
+  emit(ctx, status || { running: false, port: ctx.port }, () => statusCard(ctx, status));
 }
 
-function statusCard(ctx, library, status) {
+function statusCard(ctx, status) {
   return ui.card([
-    c.muted('Library   ') + prettyPath(library),
-    c.muted('Saves to  ') + prettyFolder(ctx.config.defaultPath),
-    ...(ctx.obsidian ? [c.muted('Obsidian  ') + 'previews on'] : []),
-    c.muted('Server    ') + (status ? c.green('● running') + c.muted(' · port ' + status.port + (status.lan ? ' · iPad can connect' : ' · this computer only')) : c.muted('○ stopped'))
+    c.muted('Server    ') + (status ? c.green('● running') + c.muted(' · port ' + status.port + (status.lan ? ' · iPad can connect' : ' · this computer only')) : c.muted('○ stopped')),
+    c.muted('Obsidian  ') + (ctx.obsidian ? 'notes and previews in vaults' : 'off')
   ]);
 }
 
 async function cmdNew(ctx, positional) {
-  const library = await requireLibrary(ctx);
-  let title = positional.join(' ') || ctx.flags.title;
-  let folder = ctx.flags.path ?? ctx.config.defaultPath;
-  if (!title) {
-    if (!ctx.interactive) throw new CliError('Specify a title: paper canvas new "<title>" [--path FOLDER].');
-    title = await ui.input({ message: 'Title', placeholder: 'e.g. Analysis sheet 3', validate: value => value ? (value.length > 200 ? 'At most 200 characters.' : '') : 'Enter a title.' });
+  const name = positional.join(' ');
+  let title = ctx.flags.title;
+  let file;
+  if (name && !(existsSync(path.resolve(expandHome(name))) && statSync(path.resolve(expandHome(name))).isDirectory())) {
+    file = canvasPath(expandHome(name));
+  } else {
+    if (!ctx.interactive) throw new CliError('Specify where to create it: paper new "<folder>/<name>" [--title TITLE].');
+    title ??= await ui.input({ message: 'Title', placeholder: 'e.g. Analysis sheet 3', validate: value => value ? (value.length > 200 ? 'At most 200 characters.' : '') : 'Enter a title.' });
     if (title === null) return;
-    if (!ctx.flags.path) { folder = await pickFolder(library, folder); if (folder === null) return; }
+    const folder = name ? path.resolve(expandHome(name)) : await pickFolder();
+    if (folder === null) return;
+    file = path.join(folder, safeFileName(title) + EXTENSION);
   }
-  const canvas = await createCanvas(library, folder, title);
-  const obsidian = ctx.obsidian ? await writeObsidianFiles(path.dirname(canvas.path), canvas) : null;
-  // The canvas exists now; a missing or foreign server only means no link yet.
-  const status = await (ctx.interactive ? requireServer(ctx, library) : callServer(ctx, library, 'status')).catch(() => null);
-  const opened = status ? await callServer(ctx, library, 'open', { id: canvas.id }).catch(() => null) : null;
+  const canvas = await createCanvas(file, title);
+  await remember(canvas);
+  const obsidian = await obsidianFiles(ctx, canvas.path, canvas);
+  // The canvas exists now; a missing server only means no link yet.
+  const status = await (ctx.interactive ? requireServer(ctx) : callServer(ctx, 'status')).catch(() => null);
+  const opened = status ? await callServer(ctx, 'open', { id: canvas.id }).catch(() => null) : null;
   jsonQr(ctx, opened?.links);
-  emit(ctx, { id: canvas.id, title: canvas.title, folder: canvas.folder, path: canvas.path, note: obsidian?.note ?? null, links: opened?.links ?? [] }, () =>
-    '\n' + canvasCard(canvas, 'Canvas created') + (obsidian ? '\n' + ok('Obsidian note ' + c.muted('· ' + path.basename(obsidian.note))) : '') + (opened ? qrSection(ctx, opened.links, 'Scan to start writing · saves automatically')
+  emit(ctx, { id: canvas.id, title: canvas.title, path: canvas.path, note: obsidian?.note ?? null, links: opened?.links ?? [] }, () =>
+    '\n' + canvasCard(canvas, 'Canvas created') + (obsidian ? '\n' + ok('Obsidian note ' + c.muted('· ' + path.basename(obsidian.note))) : '') +
+    (opened ? qrSection(ctx, opened.links, 'Scan to start writing · saves automatically')
       : '\n  ' + c.muted('Start the server with `paper start` to get a QR code for this canvas.')));
 }
 
-async function findCanvas(ctx, library, query) {
-  const canvases = await listCanvases(library, '.', { recursive: true });
-  if (!query) {
-    if (!ctx.interactive) throw new CliError('Specify a canvas ID or title: paper canvas open <id|title>.');
-    if (!canvases.length) throw new CliError('No canvases yet. Create one with `paper canvas new`.');
-    const recent = [...canvases].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-    return ui.select({
-      message: 'Which canvas?',
-      choices: recent.map(canvas => ({ label: canvas.title, value: canvas, hint: prettyFolder(canvas.folder).replace(/\x1b\[[0-9;]*m/g, '') + ' · ' + ago(canvas.updatedAt) }))
-    });
-  }
-  const exact = canvases.find(canvas => canvas.id === query);
-  if (exact) return exact;
-  const lower = query.toLowerCase();
-  const groups = [
-    query.length >= 4 ? canvases.filter(canvas => canvas.id.startsWith(lower)) : [],
-    canvases.filter(canvas => canvas.title.toLowerCase() === lower),
-    canvases.filter(canvas => canvas.title.toLowerCase().includes(lower))
-  ];
-  for (const group of groups) if (group.length === 1) return group[0];
-  const candidates = [...new Set(groups.flat())];
-  if (!candidates.length) throw new CliError('No canvas matches "' + query + '". See `paper canvas list`.');
-  if (ctx.interactive) return ui.select({ message: 'Several canvases match. Which one?', choices: candidates.map(canvas => ({ label: canvas.title, value: canvas, hint: canvas.folder + ' · ' + canvas.id.slice(0, 8) })) });
-  throw new CliError('"' + query + '" matches several canvases: ' + candidates.map(canvas => canvas.id + ' (' + canvas.title + ')').join(', '));
-}
-
 async function cmdOpen(ctx, positional) {
-  const library = await requireLibrary(ctx);
-  const canvas = await findCanvas(ctx, library, positional.join(' '));
+  const canvas = await findCanvas(ctx, positional.join(' '));
   if (!canvas) return;
-  await requireServer(ctx, library);
-  const opened = await callServer(ctx, library, 'open', { id: canvas.id });
+  const document = await readCanvas(canvas.path);
+  await remember({ id: document.id, title: document.title, path: canvas.path });
+  await requireServer(ctx);
+  const opened = await callServer(ctx, 'open', { id: document.id });
   jsonQr(ctx, opened.links);
-  emit(ctx, { ...opened, folder: canvas.folder, path: canvas.path }, () => '\n' + canvasCard(canvas) + qrSection(ctx, opened.links, 'Scan to open on your iPad'));
+  emit(ctx, { ...opened, path: canvas.path }, () => '\n' + canvasCard({ ...opened, path: canvas.path }) + qrSection(ctx, opened.links, 'Scan to open on your iPad'));
 }
 
 async function cmdList(ctx) {
-  const library = await requireLibrary(ctx);
-  const skipped = [];
-  const canvases = await listCanvases(library, ctx.flags.path ?? '.', { recursive: true, onSkip: entry => skipped.push(entry) });
-  for (const entry of skipped) process.stderr.write((ctx.json ? 'Skipped ' : '  ' + c.danger('! ') + c.muted('Skipped ')) + entry.path + ': ' + entry.reason + '\n');
+  const canvases = await knownCanvases();
   emit(ctx, canvases, () => {
-    if (!canvases.length) return '  ' + c.muted('No canvases yet. Create one with `paper canvas new`.');
+    if (!canvases.length) return '  ' + c.muted('No canvases yet. Create one with `paper new`.');
+    const byFolder = new Map();
+    for (const canvas of canvases) byFolder.set(path.dirname(canvas.path), [...(byFolder.get(path.dirname(canvas.path)) || []), canvas]);
     const lines = [];
-    let folder;
-    for (const canvas of canvases) {
-      if (canvas.folder !== folder) { folder = canvas.folder; lines.push((lines.length ? '\n' : '') + '  ' + c.accent('▪') + ' ' + c.bold(prettyFolder(folder))); }
-      lines.push('    ' + canvas.title + '  ' + c.muted(canvas.id.slice(0, 8) + ' · rev ' + canvas.revision + ' · ' + ago(canvas.updatedAt)));
+    for (const [folder, entries] of byFolder) {
+      lines.push((lines.length ? '\n' : '') + '  ' + c.accent('▪') + ' ' + c.bold(prettyPath(folder)));
+      for (const canvas of entries) lines.push('    ' + canvas.title + '  ' + c.muted(canvas.id.slice(0, 8) + ' · ' + ago(canvas.openedAt)) + (canvas.missing ? '  ' + c.danger('missing · `paper forget ' + canvas.id.slice(0, 8) + '`') : ''));
     }
     return '\n' + lines.join('\n') + '\n';
   });
 }
 
+// Moves or renames a canvas with its note and preview. Through the running
+// server when there is one, so no save can land on the old path meanwhile.
+async function cmdMove(ctx, positional) {
+  const canvas = await findCanvas(ctx, positional[0] ?? '');
+  if (!canvas) return;
+  const target = positional.slice(1).join(' ');
+  let destination;
+  if (target) {
+    const resolved = path.resolve(expandHome(target));
+    const intoFolder = /[\\/]$/.test(target) || (existsSync(resolved) && statSync(resolved).isDirectory());
+    destination = intoFolder ? path.join(resolved, path.basename(canvas.path)) : canvasPath(expandHome(target));
+  } else {
+    if (!ctx.interactive) throw new CliError('Use: paper move <file|id|title> <folder/ or new path>.');
+    const folder = await pickFolder(path.dirname(canvas.path), 'Move here');
+    if (folder === null) return;
+    const name = await ui.input({ message: 'File name', initial: canvasBase(canvas.path), validate: value => value ? '' : 'Enter a name.' });
+    if (name === null) return;
+    destination = path.join(folder, safeFileName(name) + path.basename(canvas.path).slice(canvasBase(canvas.path).length));
+  }
+  const viaServer = await callServer(ctx, 'move', { id: canvas.id, destination });
+  const result = viaServer ?? await moveCanvas(canvas.path, canvas.id, destination);
+  await relocate(canvas.id, result.path);
+  // Moved into a vault: the note and preview appear there too.
+  const added = result.note ? null : await obsidianFiles(ctx, result.path, await readCanvas(result.path, canvas.id));
+  const note = result.note ?? added?.note ?? null;
+  emit(ctx, { id: canvas.id, title: canvas.title, path: result.path, note }, () =>
+    ok('Moved ' + canvas.title + c.muted(' → ' + plain(prettyPath(result.path)))) + (note ? '\n' + ok('Note ' + c.muted('· ' + plain(prettyPath(note)))) : ''));
+}
+
+async function cmdForget(ctx, positional) {
+  const canvas = await findCanvas(ctx, positional.join(' '), { allowMissing: true });
+  if (!canvas) return;
+  await forget(canvas.id);
+  emit(ctx, { forgotten: canvas.id, path: canvas.path }, () => ok('Removed ' + canvas.title + ' from the list ' + c.muted('· the file is untouched')));
+}
+
 async function cmdDrafts(ctx) {
-  const library = await requireLibrary(ctx);
-  await requireServer(ctx, library);
-  const drafts = await callServer(ctx, library, 'drafts');
+  await requireServer(ctx);
+  const drafts = await callServer(ctx, 'drafts');
   emit(ctx, drafts, () => drafts.length ? '\n' + drafts.map(draft => '  ' + (draft.importedCanvas ? c.green('✓') : c.accent('▪')) + ' ' + draft.id + '  ' +
     c.muted(draft.importedCanvas ? 'imported · ' + draft.importedCanvas.slice(0, 8) : draft.strokes + ' strokes · ' + ago(draft.updatedAt))).join('\n') + '\n'
     : '  ' + c.muted('No browser drafts. Open the server link on a device and start writing.'));
 }
 
 async function cmdImport(ctx, positional) {
-  const library = await requireLibrary(ctx);
-  await requireServer(ctx, library);
+  await requireServer(ctx);
   let id = ctx.flags['from-browser'];
-  let title = positional.join(' ') || ctx.flags.title;
-  let folder = ctx.flags.path ?? ctx.config.defaultPath;
-  if (!id || !title) {
-    if (!ctx.interactive) throw new CliError('Use: paper canvas import "<title>" --from-browser <draft-id> [--path FOLDER].');
+  const name = positional.join(' ');
+  let title = ctx.flags.title;
+  let file = name ? canvasPath(expandHome(name)) : null;
+  if (!id || !file) {
+    if (!ctx.interactive) throw new CliError('Use: paper import "<folder>/<name>" --from-browser <draft-id>.');
     if (!id) {
-      const drafts = (await callServer(ctx, library, 'drafts')).filter(draft => !draft.importedCanvas);
+      const drafts = (await callServer(ctx, 'drafts')).filter(draft => !draft.importedCanvas);
       if (!drafts.length) throw new CliError('No browser drafts to import.');
       id = await ui.select({ message: 'Which draft?', choices: drafts.map(draft => ({ label: draft.id.slice(0, 12) + '…', value: draft.id, hint: draft.strokes + ' strokes · ' + ago(draft.updatedAt) })) });
       if (!id) return;
     }
-    if (!title) { title = await ui.input({ message: 'Title', validate: value => value ? '' : 'Enter a title.' }); if (!title) return; }
-    if (!ctx.flags.path) { folder = await pickFolder(library, folder); if (folder === null) return; }
+    if (!file) {
+      title ??= await ui.input({ message: 'Title', validate: value => value ? '' : 'Enter a title.' });
+      if (!title) return;
+      const folder = await pickFolder();
+      if (folder === null) return;
+      file = path.join(folder, safeFileName(title) + EXTENSION);
+    }
   }
-  const imported = await callServer(ctx, library, 'import', { id, title, path: folder });
+  const imported = await callServer(ctx, 'import', { id, file, title });
+  await remember(imported);
   emit(ctx, imported, () => '\n' + canvasCard(imported, 'Draft imported') + '\n  ' + c.muted('The browser tab switches to this canvas and saves automatically.'));
 }
 
 // Creates or refreshes Obsidian previews; notes are only added where missing.
 async function cmdPreview(ctx, positional) {
-  const library = await requireLibrary(ctx);
   const query = positional.join(' ');
-  const canvases = query ? [await findCanvas(ctx, library, query)].filter(Boolean) : await listCanvases(library, ctx.flags.path ?? '.', { recursive: true });
-  const results = [];
+  const canvases = query ? [await findCanvas(ctx, query)].filter(Boolean) : (await knownCanvases()).filter(canvas => !canvas.missing);
+  const results = [], skipped = [];
   for (const canvas of canvases) {
-    const directory = path.dirname(canvas.path);
-    const files = await writeObsidianFiles(directory, await readCanvas(directory, canvas.id));
-    results.push({ id: canvas.id, title: canvas.title, folder: canvas.folder, ...files });
+    if (!(await obsidianVault(canvas.path))) { skipped.push({ id: canvas.id, title: canvas.title, path: canvas.path, reason: 'not inside an Obsidian vault' }); continue; }
+    const files = await writeObsidianFiles(canvas.path, await readCanvas(canvas.path, canvas.id));
+    results.push({ id: canvas.id, title: canvas.title, path: canvas.path, ...files });
   }
+  if (query && skipped.length) throw new CliError(canvases[0].title + ' is not inside an Obsidian vault.');
   emit(ctx, results, () => {
-    if (!results.length) return '  ' + c.muted('No canvases yet. Create one with `paper canvas new`.');
-    const lines = results.map(result => ok(result.title + '  ' + c.muted(prettyFolder(result.folder).replace(/\x1b\[[0-9;]*m/g, '') + ' · ' +
-      (result.noteCreated ? 'note created: ' : 'preview updated: ') + path.basename(result.note))));
+    if (!results.length) return '  ' + c.muted('No canvases inside an Obsidian vault yet.');
+    const lines = results.map(result => ok(result.title + '  ' + c.muted((result.noteCreated ? 'note created: ' : 'preview updated: ') + plain(prettyPath(result.note)))));
     if (!ctx.obsidian) lines.push('  ' + c.muted('Automatic updates are off. Turn them on with `paper config set obsidian true`.'));
     return '\n' + lines.join('\n');
   });
@@ -486,28 +492,21 @@ async function cmdPreview(ctx, positional) {
 
 // ── Interactive home ─────────────────────────────────────────────────────────
 async function home(ctx) {
-  if (!ctx.libraryInput) {
-    await setupWizard(ctx);
-    ctx = await context(ctx.flags);
-    if (!ctx.libraryInput) return;
-    await ui.pause('Press any key to open Paperlink');
-  }
   for (;;) {
     ctx = await context(ctx.flags);
-    const library = await requireLibrary(ctx);
-    let status = null, problem = '';
-    try { status = await callServer(ctx, library, 'status'); } catch (error) { problem = error.message; }
+    const status = await callServer(ctx, 'status').catch(() => null);
+    const recent = (await knownCanvases()).filter(canvas => !canvas.missing);
     ui.clearScreen();
     console.log(ui.banner());
-    console.log(statusCard(ctx, library, status));
-    if (problem) console.log('  ' + c.danger('! ') + c.muted(problem));
+    console.log(statusCard(ctx, status));
     console.log();
     const choice = await ui.select({
       message: 'What would you like to do?', quiet: true,
       choices: [
-        { label: 'New canvas', value: 'new', hint: 'create it, scan, write' },
-        { label: 'Open canvas', value: 'open', hint: 'QR code for an existing canvas' },
-        { label: 'Browse canvases', value: 'list' },
+        { label: 'New canvas', value: 'new', hint: 'pick a folder, scan, write' },
+        { label: 'Open canvas', value: 'open', disabled: !recent.length, hint: recent.length ? 'last: ' + recent[0].title : 'none yet' },
+        { label: 'All canvases', value: 'list' },
+        { label: 'Move or rename canvas', value: 'move', disabled: !recent.length },
         status ? { label: 'Show connection QR', value: 'qr' } : { label: 'Start server', value: 'start', hint: 'runs in the background' },
         { label: 'Import browser draft', value: 'import', disabled: !status?.drafts, hint: status ? status.drafts + ' unsaved' : 'needs the server' },
         { separator: '' },
@@ -523,11 +522,12 @@ async function home(ctx) {
       if (choice === 'new') await cmdNew(ctx, []);
       if (choice === 'open') await cmdOpen(ctx, []);
       if (choice === 'list') await cmdList(ctx);
+      if (choice === 'move') await cmdMove(ctx, []);
       if (choice === 'start') await cmdStart(ctx);
       if (choice === 'qr') console.log(qrSection(ctx, status.links, 'Scan with your iPad to connect'));
       if (choice === 'import') await cmdImport(ctx, []);
       if (choice === 'stop') await cmdStop(ctx);
-      if (choice === 'settings') { await settings(ctx, library, status); continue; }
+      if (choice === 'settings') { await settings(ctx, status); continue; }
     } catch (error) {
       console.log('  ' + c.danger('✗ ' + error.message));
     }
@@ -536,7 +536,7 @@ async function home(ctx) {
   }
 }
 
-async function settings(ctx, library, status) {
+async function settings(ctx, status) {
   let config = ctx.config;
   for (;;) {
     ui.clearScreen();
@@ -544,25 +544,16 @@ async function settings(ctx, library, status) {
     const choice = await ui.select({
       message: 'Settings', quiet: true,
       choices: [
-        { label: 'Library', value: 'library', hint: prettyPath(config.library) },
-        { label: 'Default folder', value: 'defaultPath', hint: (config.defaultPath || '.').split(path.sep).join(' › ') },
-        { label: 'Obsidian previews', value: 'obsidian', hint: config.obsidian ? 'on' : 'off' },
+        { label: 'Obsidian notes', value: 'obsidian', hint: config.obsidian ? 'on · for canvases inside a vault' : 'off' },
         { label: 'iPad & network access', value: 'lan', hint: config.lan ? 'on' : 'off · this computer only' },
         { label: 'Port', value: 'port', hint: String(config.port) },
         { separator: '' },
-        { label: 'Run setup again', value: 'wizard' },
         { label: 'Back', value: 'back' }
       ]
     });
     if (!choice || choice === 'back') return;
-    if (choice === 'wizard') { await setupWizard({ ...ctx, config }); config = await loadConfig(); continue; }
     let value;
-    if (choice === 'library') {
-      const answer = await ui.input({ message: 'Library folder', initial: config.library ? tilde(config.library) : '', complete: completeDirectory });
-      if (answer) { try { value = await realpath(expandHome(answer)); } catch { console.log('  ' + c.danger('✗ Folder not found.')); await ui.pause(); continue; } }
-    }
-    if (choice === 'defaultPath') value = await pickFolder(library, config.defaultPath);
-    if (choice === 'obsidian') value = await ui.confirm({ message: 'Add Markdown previews for Obsidian?', initial: config.obsidian });
+    if (choice === 'obsidian') value = await ui.confirm({ message: 'Add a note and preview to canvases inside an Obsidian vault?', initial: config.obsidian });
     if (choice === 'lan') value = await ui.confirm({ message: 'Allow your iPad and other devices on this Wi-Fi to connect?', initial: config.lan });
     if (choice === 'port') {
       const answer = await ui.input({ message: 'Port', initial: String(config.port), validate: text => { try { validPort(text); return ''; } catch (error) { return error.message; } } });
@@ -571,8 +562,8 @@ async function settings(ctx, library, status) {
     if (value === null || value === undefined) continue;
     config = await saveConfig({ ...config, [choice]: value });
     if (choice === 'obsidian' && value) {
-      const count = (await listCanvases(config.library, '.', { recursive: true })).length;
-      if (count && await ui.confirm({ message: 'Add Obsidian notes for your ' + count + ' existing canvas' + (count === 1 ? '' : 'es') + ' now?', initial: true })) {
+      const count = (await knownCanvases()).filter(canvas => !canvas.missing).length;
+      if (count && await ui.confirm({ message: 'Add notes for existing canvases inside vaults now?', initial: true })) {
         await cmdPreview({ ...ctx, config, obsidian: true }, []);
         await ui.pause();
       }
@@ -593,10 +584,15 @@ function helpText() {
     '    paper                                       ' + c.muted('interactive menu (in a terminal)'),
     '    paper <command> [options]',
     '',
-    '  ' + c.bold('Setup'),
-    command('init [folder]', 'choose the library folder (wizard without folder)'),
-    command('config', 'show settings'),
-    command('config set <key> <value>', 'library, defaultPath, obsidian, lan, port'),
+    '  ' + c.bold('Canvases') + c.muted('  · a canvas is a ' + EXTENSION + ' file, wherever you keep it'),
+    command('new "<folder>/<name>" [--title TITLE]', 'create a canvas file, print its QR code'),
+    command('open <file|id|title>', 'print links and QR code for a canvas'),
+    command('list', 'canvases created or opened on this computer'),
+    command('move <canvas> <folder/ | new path>', 'move or rename with note and preview'),
+    command('forget <id|title>', 'remove from the list, keep the file'),
+    command('preview [file|id|title]', 'write Obsidian notes and previews'),
+    command('drafts', 'unsaved drafts from connected tabs'),
+    command('import "<folder>/<name>" --from-browser <id>', 'save a draft as a canvas'),
     '',
     '  ' + c.bold('Server'),
     command('start', 'run in the background and show the QR code'),
@@ -604,29 +600,22 @@ function helpText() {
     command('status', 'is it running, on which port and links'),
     command('stop', 'stop the background server'),
     '',
-    '  ' + c.bold('Canvases'),
-    command('canvas new "<title>" [--path FOLDER]', 'create a canvas, print its QR code'),
-    command('canvas list [--path FOLDER]', 'list canvases in the library'),
-    command('canvas open <id|title>', 'print links and QR code for a canvas'),
-    command('canvas drafts', 'unsaved drafts from connected tabs'),
-    command('canvas import "<title>" --from-browser <id>', 'save a draft as a canvas'),
-    command('preview [id|title] [--path FOLDER]', 'write Obsidian previews and missing notes'),
-    '    ' + c.muted('Shortcuts: paper new, paper list, paper open, paper preview'),
+    '  ' + c.bold('Settings'),
+    command('config', 'show settings'),
+    command('config set <key> <value>', 'obsidian, lan, port'),
     '',
     '  ' + c.bold('Options'),
-    command('--library <folder>', 'use another library (alias --vault)'),
-    command('--path <folder>', 'folder inside the library'),
     command('--port <n>', 'server port (default from config, 8080)'),
     command('--lan / --no-lan', 'allow devices on your network'),
-    command('--obsidian / --no-obsidian', 'Obsidian previews for this command or server'),
+    command('--obsidian / --no-obsidian', 'Obsidian notes for this command or server'),
     command('--json', 'machine-readable output'),
     command('--qr / --no-qr', 'force or hide QR codes'),
     command('--no-start', 'never offer to start the server'),
     '',
     '  ' + c.bold('Scripts and AI agents'),
     '    ' + c.muted('Outside a terminal every command prints JSON and never prompts. Errors go to'),
-    '    ' + c.muted('stderr as {"error": "..."} with exit code 1. Settings come from flags, then'),
-    '    ' + c.muted('PAPERLINK_LIBRARY / PAPERLINK_PORT, then ' + prettyPath(configPath()) + '.'),
+    '    ' + c.muted('stderr as {"error": "..."} with exit code 1. Relative paths are resolved from'),
+    '    ' + c.muted('the current folder. Settings: flags, then PAPERLINK_PORT, then ' + prettyPath(configPath()) + '.'),
     ''
   ].join('\n');
 }
@@ -639,24 +628,25 @@ export async function main(argv) {
     ctx = await context(flags);
     if (flags.version) return console.log(ctx.json ? JSON.stringify({ version: VERSION }) : 'paperlink ' + VERSION);
     let [command, ...rest] = positional;
-    if (command === 'canvas') [command, ...rest] = rest.length ? ['canvas:' + rest[0], ...rest.slice(1)] : ['canvas:'];
-    else if (['new', 'list', 'open', 'drafts', 'import', 'preview'].includes(command)) command = 'canvas:' + command;
+    if (command === 'canvas') [command, ...rest] = rest;
     if (flags.help || command === 'help') return console.log(helpText());
     switch (command) {
       case undefined: return ctx.interactive ? await home(ctx) : console.log(helpText());
-      case 'init': return await cmdInit(ctx, rest);
       case 'config': return await cmdConfig(ctx, rest);
       case 'serve': return await cmdServe(ctx);
       case 'start': return await cmdStart(ctx);
       case 'stop': return await cmdStop(ctx);
       case 'status': return await cmdStatus(ctx);
-      case 'canvas:new': case 'canvas:create': return await cmdNew(ctx, rest);
-      case 'canvas:list': return await cmdList(ctx);
-      case 'canvas:open': return await cmdOpen(ctx, rest);
-      case 'canvas:drafts': return await cmdDrafts(ctx);
-      case 'canvas:import': return await cmdImport(ctx, rest);
-      case 'canvas:preview': return await cmdPreview(ctx, rest);
-      default: throw new CliError('Unknown command ' + (command.replace('canvas:', 'canvas ') || 'canvas') + '. See `paper help`.');
+      case 'new': case 'create': return await cmdNew(ctx, rest);
+      case 'list': return await cmdList(ctx);
+      case 'open': return await cmdOpen(ctx, rest);
+      case 'move': case 'mv': return await cmdMove(ctx, rest);
+      case 'forget': return await cmdForget(ctx, rest);
+      case 'preview': return await cmdPreview(ctx, rest);
+      case 'drafts': return await cmdDrafts(ctx);
+      case 'import': return await cmdImport(ctx, rest);
+      case 'init': throw new CliError('Libraries are gone: a canvas is a ' + EXTENSION + ' file wherever you create it. Try `paper new "<folder>/<name>"`.');
+      default: throw new CliError('Unknown command ' + command + '. See `paper help`.');
     }
   } catch (error) {
     if (ctx.json) process.stderr.write(JSON.stringify({ error: error.message }) + '\n');

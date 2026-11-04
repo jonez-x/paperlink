@@ -68,14 +68,33 @@ User decisions: storage is not tied to Obsidian. A "library" is any folder; Obsi
 - CLI: `canvas new` writes note and preview; new command `paper preview [id|title] [--path]` (alias `canvas preview`); `config set obsidian` now asks for a restart; Settings offers notes for existing canvases when turned on; status/serve cards show the setting.
 - Verified: npm test (11 tests: preview layout and escaping, note clash/rename/user-text preservation, end-to-end note on new, SVG flushed after a browser save on stop, note on import, idempotent `paper preview`). Rendered the three real vault canvases to PNG; handwriting correct. Not yet viewed inside Obsidian by the user; whether Obsidian re-renders the embed immediately after the SVG changes is unverified.
 
+## Canvas files instead of libraries (2026-11-04, Claude Code)
+
+User decision: no library concept. A canvas is a `.paperlink` file wherever the user (or an AI agent through the CLI) creates it; the server and browser UI are unchanged. Inside an Obsidian vault the note and preview appear automatically.
+
+- src/documents.js: `<Name>.paperlink` files (title defaults to the file name, `--title` overrides), `canvasPath` resolves relative to the cwd, `obsidianVault` walks up to a `.obsidian` folder, folder browser helpers. Legacy `<id>.paperlink.json` files still open.
+- src/store.js reads/saves by file path; with an ID it refuses a file that now contains another canvas.
+- src/registry.js: `~/.config/paperlink/canvases.json` lists canvases created or opened by the local CLI (ID → path, title, openedAt). Only the CLI writes it. The server serves exactly these IDs to devices, reloads the list on a miss or when a known path vanished, and on every CLI open.
+- Server: one per user (lock in the temp dir keyed by the config directory), no library argument. Previews only for files inside a vault.
+- CLI: `new`, `open <file|id|prefix|title>`, `list` (marks moved files as missing), `forget`, `preview`, `drafts`, `import <path> --from-browser`, `start/serve/stop/status`, `config set obsidian|lan|port`. `paper` opens the menu (no setup wizard); New canvas uses a file-system folder picker starting in the cwd with recent folders. `--library/--vault/--path/init` give a clear error. A config from the library version is migrated once: its canvases are added to the list, `library/defaultPath` are dropped and `obsidian` becomes true.
+- Verified: npm test (12 tests: file storage and ID check, discovery, preview/notes incl. legacy names, full CLI/server flow with migration, vault notes, open by path/title/prefix, unregistered files 404 until opened, draft import, moved files, forget, preview flush). Interactive New canvas flow driven in a pseudo-terminal: title, folder picker, file + note + SVG created in a test vault, server start prompt, QR/link output.
+- Not yet used by the user. Device pairing so that a link inside the Obsidian note opens the canvas without a fresh QR code remains open.
+
+## Moving canvases (2026-11-04, Claude Code)
+
+- src/move.js: `moveCanvas` moves/renames canvas, `<id>.preview.svg` and note together (a note named like the canvas follows a rename, a user-chosen note name stays, clashes get " (2)", EXDEV falls back to copy). `findMoved` searches by ID in the enclosing vault (or the old folder's parent, depth 3; never home or root). `followNote` moves canvas and preview next to a note the user moved inside Obsidian.
+- Previews are now named `<id>.preview.svg` (stable across renames, unique vault-wide for Obsidian embeds).
+- Server: `/cli/move` flushes pending previews and moves inside the write queue; a vanished path triggers `findMoved` (once per 5 s per canvas) and updates the registry (`relocate`); after a save, if the note left the canvas folder, the vault is searched (once a minute per canvas) and the canvas follows.
+- CLI: `paper move <canvas> <folder/|new path>` (alias `mv`, interactive folder picker + name), menu entry; `list`/`open` heal moved files via `findMoved`.
+- Verified: npm test (15 tests incl. rename/move with companions, discovery in and outside vaults, note following both as unit and through the running server, `paper move` via server, Finder move healed by API and `list`).
+
 ## Next implementation step
 
-User checks the previews in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
+User tries the file-based CLI and the notes in Obsidian. Then device pairing with stable links from the note. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
 
 ## Current limitations
 
 - Browser-only drafts are per device/origin. Vault saves work. Live device sync, PDFs, MCP and assistant triggers remain pending.
-- CLI and API list one configured folder. No init/config or recursive index yet.
 - No pinch zoom, panning, pressure-aware ink, lasso or highlighter.
 - Undo history is session-only. localStorage data is only minimally validated.
 - Eraser hit testing and redraw iterate all paths. Optimize when document sizes require it.
@@ -87,13 +106,13 @@ User checks the previews in Obsidian. Test the storage flow on the user's iPad. 
 ## Run
 
 ```sh
-npm start
-npm start -- --port 8080 --lan --vault "/path/to/vault" --path "Paperlink/Canvases"
-node bin/paper.js canvas create "Exercise" --vault "/path/to/vault" --path "Notes"
-node bin/paper.js canvas list --vault "/path/to/vault" --path "Notes"
+npm link                      # `paper` runs this checkout
+paper start                   # or: npm start (foreground)
+paper new "Notes/Exercise"
+paper list --json
 ```
 
-The serve process reads index.html per request, so UI updates need only a browser reload. Restart it for server-code changes. Before stopping a process, verify it is the Paperlink listener. Use temporary vaults for tests.
+The serve process reads index.html per request, so UI updates need only a browser reload. Restart it for server-code changes. Before stopping a process, verify it is the Paperlink listener. Use temporary folders and PAPERLINK_CONFIG / PAPERLINK_LOCK_DIR for tests.
 
 ## Repository synchronization
 

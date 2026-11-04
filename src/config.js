@@ -2,12 +2,10 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-// Paperlink stores canvases in a "library": any existing folder. An Obsidian
-// vault is one option; Obsidian-specific output is opt-in via `obsidian`.
+// Canvases are plain files anywhere; there is no storage folder to configure.
+// `obsidian` adds a note and preview next to canvases that sit inside a vault.
 export const DEFAULTS = Object.freeze({
-  library: null,
-  defaultPath: 'Paperlink',
-  obsidian: false,
+  obsidian: true,
   port: 8080,
   lan: false
 });

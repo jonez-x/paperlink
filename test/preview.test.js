@@ -20,17 +20,28 @@ test('notes are created once, survive renames and avoid name clashes', async () 
   const directory = await mkdtemp(path.join(tmpdir(), 'paperlink-preview-'));
   try {
     await writeFile(path.join(directory, 'Sheet.md'), 'my own note\n');
-    const first = await writeObsidianFiles(directory, canvas(['M 1 1 l 0.01 0']));
+    const file = path.join(directory, 'Sheet.paperlink');
+    const first = await writeObsidianFiles(file, canvas(['M 1 1 l 0.01 0']));
     assert.equal(path.basename(first.note), 'Sheet (2).md');
+    assert.match(await readFile(first.note, 'utf8'), /!\[\[8cdf569c-5c4a-4ca6-97c6-ed92c0ca05f5\.preview\.svg\]\]/);
     assert.equal(first.noteCreated, true);
 
     await writeFile(first.note, (await readFile(first.note, 'utf8')) + '\nMy annotations\n');
     await rename(first.note, path.join(directory, 'Renamed.md'));
-    const second = await writeObsidianFiles(directory, canvas(['M 1 1 l 0.01 0 L 5 5']));
+    const second = await writeObsidianFiles(file, canvas(['M 1 1 l 0.01 0 L 5 5']));
     assert.equal(path.basename(second.note), 'Renamed.md');
     assert.equal(second.noteCreated, false);
     assert.match(await readFile(second.note, 'utf8'), /My annotations/, 'user text is never overwritten');
     assert.match(await readFile(second.preview, 'utf8'), /L 5 5/);
     assert.deepEqual((await readdir(directory)).sort(), ['8cdf569c-5c4a-4ca6-97c6-ed92c0ca05f5.preview.svg', 'Renamed.md', 'Sheet.md']);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('canvases from earlier versions keep their ID-named preview and get a titled note', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'paperlink-preview-'));
+  try {
+    const files = await writeObsidianFiles(path.join(directory, '8cdf569c-5c4a-4ca6-97c6-ed92c0ca05f5.paperlink.json'), canvas([], 'iPad Test'));
+    assert.equal(path.basename(files.note), 'iPad Test.md');
+    assert.equal(path.basename(files.preview), '8cdf569c-5c4a-4ca6-97c6-ed92c0ca05f5.preview.svg');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

@@ -1,5 +1,4 @@
-import { readFile, rename, unlink, open, realpath } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile, rename, unlink, open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 export function validateStrokes(strokes) {
@@ -9,25 +8,31 @@ export function validateStrokes(strokes) {
     throw Object.assign(new Error('Invalid stroke data.'), { status: 400 });
   }
 }
-export async function readCanvas(directory, id) {
-  if (!/^[a-f0-9-]{36}$/.test(id)) throw Object.assign(new Error('Invalid canvas ID.'), { status: 400 });
-  const filename = path.join(directory, id + '.paperlink.json');
-  if (await realpath(filename) !== filename) throw new Error('Canvas symlinks are not supported.');
-  const document = JSON.parse(await readFile(filename, 'utf8'));
-  if (document?.id !== id || document.format !== 'paperlink' || document.version !== 1 ||
-      !Array.isArray(document.pages) || document.pages.length !== 1 || !Number.isInteger(document.revision)) {
+
+// Reads a canvas file. With `id`, the file must still contain that canvas, so a
+// file replaced or renamed behind Paperlink's back is never served by mistake.
+export async function readCanvas(file, id) {
+  if (id !== undefined && !/^[a-f0-9-]{36}$/.test(id)) throw Object.assign(new Error('Invalid canvas ID.'), { status: 400 });
+  let document;
+  try { document = JSON.parse(await readFile(file, 'utf8')); }
+  catch (error) { throw error instanceof SyntaxError ? new Error('Not a readable canvas file: invalid JSON.') : error; }
+  if (document?.format !== 'paperlink' || document.version !== 1 || !/^[a-f0-9-]{36}$/.test(document.id ?? '') ||
+      typeof document.title !== 'string' || !Array.isArray(document.pages) || document.pages.length !== 1 ||
+      !Number.isInteger(document.revision)) {
     throw new Error('Unsupported document format.');
   }
+  if (id !== undefined && document.id !== id) throw Object.assign(new Error('The file no longer contains this canvas.'), { code: 'ENOENT' });
   validateStrokes(document.pages[0].strokes);
   return document;
 }
-export async function saveCanvas(directory, id, request) {
+
+export async function saveCanvas(file, id, request) {
   validateStrokes(request.strokes);
   if (!Number.isInteger(request.revision) || typeof request.operationId !== 'string' ||
       !/^[a-zA-Z0-9-]{1,80}$/.test(request.operationId)) {
     throw Object.assign(new Error('Invalid save request.'), { status: 400 });
   }
-  const document = await readCanvas(directory, id);
+  const document = await readCanvas(file, id);
   const hash = createHash('sha256').update(JSON.stringify(request)).digest('hex');
   const receipt = (document.receipts || []).find(r => r.id === request.operationId);
   if (receipt) {
@@ -41,13 +46,12 @@ export async function saveCanvas(directory, id, request) {
   document.revision++;
   document.updatedAt = new Date().toISOString();
   document.receipts = [...(document.receipts || []), { id: request.operationId, hash, revision: document.revision }].slice(-100);
-  const filename = path.join(directory, id + '.paperlink.json');
-  const temporary = filename + '.' + request.operationId + '.tmp';
+  const temporary = file + '.' + request.operationId + '.tmp';
   try {
-    const file = await open(temporary, 'wx');
-    try { await file.writeFile(JSON.stringify(document, null, 2) + '\n'); await file.sync(); }
-    finally { await file.close(); }
-    await rename(temporary, filename);
+    const handle = await open(temporary, 'wx');
+    try { await handle.writeFile(JSON.stringify(document, null, 2) + '\n'); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temporary, file);
   } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   return { revision: document.revision };
 }

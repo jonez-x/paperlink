@@ -33,7 +33,7 @@ async function ownerPid(file) {
 async function removeIfStale(file) {
   const pid = await ownerPid(file);
   if (pid === null) return;
-  if (isAlive(pid)) throw new Error('This folder is already served by process ' + pid + '. Stop that server first.');
+  if (isAlive(pid)) throw new Error('Paperlink is already served by process ' + pid + '. Stop that server first.');
   await unlink(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
 }
 
