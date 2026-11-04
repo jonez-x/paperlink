@@ -2,7 +2,7 @@
 
 A self-hosted notebook for handwriting, assignments and PDF worksheets. Start it from your laptop's CLI, write with Apple Pencil in your iPad browser, and keep every canvas as a `.paperlink` file wherever you like, for example next to your notes in an Obsidian vault. An optional assistant can read a page and leave annotations.
 
-**Status:** Early prototype. Pen, stroke eraser, undo/redo, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, device pairing with stable links and an interactive CLI are implemented. PDFs, live multi-device synchronization and AI integration are planned.
+**Status:** Early prototype. Pen, stroke eraser, undo/redo, zoom and panning, multiple pages, PDF worksheets, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, device pairing with stable links and an interactive CLI are implemented. PDF export, live multi-device synchronization and AI integration are planned.
 
 ## Install
 
@@ -21,6 +21,7 @@ paper           # interactive menu
 
 ```sh
 paper new "Uni/Analysis/Sheet 3"          # creates Uni/Analysis/Sheet 3.paperlink, prints its QR code
+paper new "Uni/Analysis/Sheet 4" --pdf ~/Downloads/Blatt4.pdf   # write on the pages of a PDF
 paper start                               # background server + QR code
 paper open "Uni/Analysis/Sheet 3"         # file path, ID, ID prefix or title
 paper list                                # canvases created or opened on this computer
@@ -40,7 +41,19 @@ In the menu, **All canvases** lists everything; pick one to open, move, delete o
 
 A canvas is one file, `<Name>.paperlink`, wherever you create it. Relative paths are resolved from the current folder; `--title` sets a title other than the file name. There is no storage folder to configure.
 
-Paperlink keeps a list of the canvases created or opened on this computer (`~/.config/paperlink/canvases.json`). The server only serves those files to devices, so nobody on the network can request other files. ## Moving canvases
+Paperlink keeps a list of the canvases created or opened on this computer (`~/.config/paperlink/canvases.json`). The server only serves those files to devices, so nobody on the network can request other files. ## Writing
+
+- **Apple Pencil or mouse** writes; the eraser removes whole strokes.
+- **One finger** pans, **two fingers** pinch to zoom. On a Mac, scroll pans and pinch (or ⌘/Ctrl + scroll) zooms. The frame button fits the page again.
+- **Pages** stack vertically; the page button adds an A4 page. Writing may run over a page's edge.
+
+## PDF worksheets
+
+`paper new "<folder>/<name>" --pdf <file>` (or the PDF prompt in the menu) turns every page of a PDF into a page to write on. The PDF stays unchanged: a PDF already in the canvas folder is used in place, one from elsewhere is copied next to the canvas. It moves with the canvas; deleting the canvas trashes a copied PDF but never one that was already there. Pages added later are blank.
+
+PDF pages keep their original look (white paper, dark ink) in both themes and are re-rendered sharply when you zoom. Rendering uses [pdf.js](https://github.com/mozilla/pdf.js) 5.4.624 (Apache-2.0), bundled in `public/vendor/pdfjs`, so Paperlink still works offline and needs no `npm install`. Obsidian previews show the PDF pages once the browser has opened the canvas, because the server cannot render PDFs itself.
+
+## Moving canvases
 
 Use `paper move <canvas> <folder/>` to move, or `paper move <canvas> <new path>` to rename. The note moves along, and a running server switches over without losing a save. Moves made elsewhere are caught too:
 

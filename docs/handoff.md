@@ -103,6 +103,13 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - CLI: `paper pair`, `paper devices`, `paper unpair <device>|--all`; menu entry "Pair a device", Settings › Paired devices.
 - Verified: npm test (16 tests incl. one-time codes, unknown/replaced/revoked tokens, device dedupe, note link, old note upgrade). In Chrome against a sandbox server: pairing link opens the canvas and cleans the URL, a stroke saves, a fresh load of the plain canvas link opens it after pairing, and without a token the page shows the pairing hint. Not yet tested on the iPad, in particular whether iPadOS resolves `<Name>.local`.
 
+## Zoom, pages and PDF worksheets (2026-11-04, Claude Code)
+
+- UI: the SVG gets a view transform (viewBox from `{x, y, scale}`); grids are SVG patterns in world units with 1-screen-pixel lines. Pencil/mouse write, one finger pans, two fingers pinch-zoom (touches are ignored while the pen is down), wheel pans, ctrl/⌘-wheel zooms, Fit button, zoom limits 0.5–8× of fit. Pages stack vertically (gap 40); strokes are stored in page coordinates and assigned to the page under the start point (or nearest). Add-page button (A4 900×1273, undoable; hidden for browser-only drafts). IDs via getRandomValues because randomUUID needs a secure context.
+- Format version 2: `pages[]` with `{id, width, height, strokes, pdfPage?}` and optional `pdf: {file, copied}`. Saves send all pages; the server keeps size and `pdfPage` of known pages, accepts new blank pages, refuses dropping PDF pages and old single-page `strokes` saves once a canvas has several pages. Version 1 files open and upgrade on the next save.
+- PDFs: pdf.js 5.4.624 legacy build vendored in public/vendor/pdfjs (with standard fonts, cMaps, wasm, ICC; ~5 MB) and served at /vendor/pdfjs/. src/pdf.js reads page sizes in Node (DOMMatrix stub, no rendering). `paper new … --pdf FILE` (or menu prompt) makes one 900-wide page per PDF page; the PDF is used in place if already in the canvas folder, else copied (`copied: true`). GET /api/canvases/:id/pdf for paired devices. The browser renders visible pages at zoom-appropriate width (700–2400 px, power-of-two steps), others at 700 px, and uploads 600 px JPEGs (PUT …/backgrounds/:pageId, JPEG only, PDF pages only) to `~/.config/paperlink/backgrounds/<id>/` for the Obsidian preview, which embeds them as data URLs (≈200 KB per page). Move takes the PDF along (free name on clash, reference updated); delete trashes copied PDFs and the image cache.
+- Verified: npm test (18 tests, new: multi-page merge rules, v1 upgrade, PDF creation incl. broken PDF, in-place vs copied, PDF serving and auth, vendor route and traversal, preview image upload rules, PDF page protection, move/delete with PDF). In Chrome against a sandbox server: zoom, fit, add page, undo of the page, saving v2; a generated two-page PDF renders, ink is dark on it, zoom re-renders sharply, the Obsidian preview SVG shows PDF and ink. Not yet tested: touch gestures on the iPad, large/scanned PDFs, memory on the iPad.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
@@ -110,10 +117,9 @@ User tries the file-based CLI and the notes in Obsidian. Test the storage flow o
 ## Current limitations
 
 - Browser-only drafts are per device/origin. Vault saves work. Live device sync, PDFs, MCP and assistant triggers remain pending.
-- No pinch zoom, panning, pressure-aware ink, lasso or highlighter.
+- No pressure-aware ink, lasso or highlighter. PDF export pending.
 - Undo history is session-only. localStorage data is only minimally validated.
 - Eraser hit testing and redraw iterate all paths. Optimize when document sizes require it.
-- The SVG fixed viewBox and CSS grid will need a shared world coordinate transform for zoom/pan.
 - LAN API access uses paired device tokens over HTTP and assumes a trusted LAN. HTTPS and production hardening remain pending.
 - Existing folder symlinks outside the vault are rejected. The file layer is not hardened against concurrent filesystem tampering.
 - Avoid claiming full iPad compatibility from desktop tests.

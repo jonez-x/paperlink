@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
@@ -8,7 +8,8 @@ import { createCanvas, EXTENSION, isCanvasFile, obsidianVault } from './document
 import { readCanvas, saveCanvas, validateStrokes } from './store.js';
 import { acquireFolderLock } from './lock.js';
 import { DraftStore } from './drafts.js';
-import { findNote, writeObsidianFiles, writePreview } from './preview.js';
+import { backgroundDirectory, backgroundPath, findNote, writeObsidianFiles, writePreview } from './preview.js';
+import { validPdfName } from './pdf.js';
 import { loadRegistry, relocate } from './registry.js';
 import { findMoved, followNote, moveCanvas } from './move.js';
 import { stateDirectory } from './config.js';
@@ -145,6 +146,16 @@ export async function serve({ port, lan, obsidian = true }) {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(value));
   }
+  async function rawBody(req, limit) {
+    let size = 0;
+    const chunks = [];
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > limit) throw httpError(413, 'Upload too large.');
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
   async function body(req) {
     let size = 0;
     const chunks = [];
@@ -232,6 +243,15 @@ export async function serve({ port, lan, obsidian = true }) {
         res.end(await readFile(new URL('../public/index.html', import.meta.url)));
         return;
       }
+      // pdf.js, served from the project so it works offline.
+      const vendor = /^\/vendor\/pdfjs\/((?:[a-z_]+\/)?[A-Za-z0-9_.-]+)$/.exec(req.url);
+      if (vendor && req.method === 'GET' && !vendor[1].includes('..')) {
+        const types = { '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.ttf': 'font/ttf' };
+        const content = await readFile(new URL('../public/vendor/pdfjs/' + vendor[1], import.meta.url));
+        res.writeHead(200, { 'Content-Type': types[path.extname(vendor[1])] || 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' });
+        res.end(content);
+        return;
+      }
       if (req.url.startsWith('/cli/')) return await handleCli(req, res);
       if (req.url === '/api/pair' && req.method === 'POST') {
         const input = await body(req);
@@ -249,10 +269,37 @@ export async function serve({ port, lan, obsidian = true }) {
         validateStrokes(input.strokes);
         return json(res, 200, { document: drafts.publish(draftMatch[1], input.strokes) });
       }
+      const pdfMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/pdf$/.exec(req.url);
+      if (pdfMatch && req.method === 'GET') {
+        const file = await locate(pdfMatch[1]);
+        const document = await readCanvas(file, pdfMatch[1]);
+        if (!validPdfName(document.pdf?.file)) throw httpError(404, 'This canvas has no PDF.');
+        const content = await readFile(path.join(path.dirname(file), document.pdf.file)).catch(() => { throw httpError(404, 'The PDF ' + document.pdf.file + ' is missing next to the canvas.'); });
+        res.writeHead(200, { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store' });
+        res.end(content);
+        return;
+      }
+      // Low-resolution page images for the Obsidian preview of PDF pages.
+      const backgroundMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/backgrounds\/([a-zA-Z0-9-]{1,64})$/.exec(req.url);
+      if (backgroundMatch && req.method === 'PUT') {
+        const [, id, pageId] = backgroundMatch;
+        const file = await locate(id);
+        const document = await readCanvas(file, id);
+        if (!document.pages.some(page => page.id === pageId && page.pdfPage !== undefined)) throw httpError(404, 'Unknown PDF page.');
+        const image = await rawBody(req, 1024 * 1024);
+        if (image[0] !== 0xff || image[1] !== 0xd8) throw httpError(400, 'Expected a JPEG image.');
+        await mkdir(backgroundDirectory(id), { recursive: true });
+        await writeFile(backgroundPath(id, pageId), image);
+        void schedulePreview(id, file);
+        return json(res, 200, { stored: pageId });
+      }
       const match = /^\/api\/canvases\/([a-f0-9-]{36})$/.exec(req.url);
       if (match && req.method === 'GET') {
         const file = await locate(match[1]);
-        return json(res, 200, await serialize(() => readCanvas(file, match[1])));
+        const document = await serialize(() => readCanvas(file, match[1]));
+        // Tells the browser which page images the preview still lacks.
+        const cached = await readdir(backgroundDirectory(match[1])).catch(() => []);
+        return json(res, 200, { ...document, receipts: undefined, cachedBackgrounds: cached.map(name => name.replace(/\.jpg$/, '')) });
       }
       if (match && req.method === 'PUT') {
         const input = await body(req);

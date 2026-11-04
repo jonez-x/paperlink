@@ -1,5 +1,6 @@
 import { readFile, rename, unlink, open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { validPdfName } from './pdf.js';
 
 const PAGE_ID = /^[a-zA-Z0-9-]{1,64}$/;
 const dimension = value => Number.isFinite(value) && value >= 50 && value <= 10000;
@@ -40,6 +41,7 @@ export async function readCanvas(file, id) {
   if (id !== undefined && document.id !== id) throw Object.assign(new Error('The file no longer contains this canvas.'), { code: 'ENOENT' });
   try { validatePages(document.pages); }
   catch { throw new Error('Unsupported document format: invalid pages.'); }
+  if (document.pdf !== undefined && !validPdfName(document.pdf?.file)) throw new Error('Unsupported document format: invalid PDF reference.');
   return document;
 }
 

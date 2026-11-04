@@ -1,1 +1,1 @@
-{"name":"paperlink","version":"0.0.1","private":true,"type":"module","bin":{"paper":"bin/paper.js"},"scripts":{"start":"node bin/paper.js serve","test":"node --test"},"engines":{"node":">=22"}}
+{"name":"paperlink","version":"0.0.1","private":true,"type":"module","bin":{"paper":"bin/paper.js"},"scripts":{"start":"node bin/paper.js serve","test":"node --test test/*.test.js"},"engines":{"node":">=22"}}

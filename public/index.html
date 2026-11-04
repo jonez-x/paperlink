@@ -145,6 +145,9 @@ main::after {
 #sheet .grid-line { fill: none; stroke: var(--grid); }
 #sheet .mat-line { fill: none; stroke: var(--line); }
 #sheet .ink path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+/* PDF pages keep their original look in both themes, so ink stays dark on them. */
+#sheet .pdf-page .page { fill: #ffffff; }
+#sheet .pdf-page .ink path { stroke: #24231f; }
 @media (max-width: 600px) {
   header { padding: 0 16px; gap: 12px; }
 
@@ -253,9 +256,11 @@ function save() {
 }
 function render() {
   const groups = pages.map((page, index) => {
-    const group = element('g', { transform: 'translate(0 ' + pageTop(index) + ')' });
+    const pdf = page.pdfPage !== undefined;
+    const group = element('g', { transform: 'translate(0 ' + pageTop(index) + ')', class: pdf ? 'pdf-page' : '' });
     group.append(element('rect', { class: 'page', width: page.width, height: page.height, 'vector-effect': 'non-scaling-stroke' }));
-    group.append(element('rect', { width: page.width, height: page.height, fill: 'url(#grid)' }));
+    if (pdf) group.append(element('image', { 'data-page': page.id, width: page.width, height: page.height, preserveAspectRatio: 'none', ...(backgrounds.get(page.id) && { href: backgrounds.get(page.id).url }) }));
+    else group.append(element('rect', { width: page.width, height: page.height, fill: 'url(#grid)' }));
     const ink = element('g', { class: 'ink' });
     for (const stroke of page.strokes) ink.append(element('path', { d: stroke }));
     group.append(ink);
@@ -292,6 +297,84 @@ function applyView() {
   for (const [key, value] of Object.entries({ x: view.x, y: view.y, width: w, height: h })) mat.setAttribute(key, value);
   // Grid lines stay one screen pixel wide at every zoom level.
   for (const line of sheet.querySelectorAll('.grid-line, .mat-line')) line.setAttribute('stroke-width', 1 / view.scale);
+  scheduleBackgrounds();
+}
+
+// ── PDF pages: rendered by pdf.js into images under the ink ──
+// Visible pages are rendered sharp for the current zoom, others stay small,
+// which keeps memory bounded on the iPad.
+const backgrounds = new Map(); // page ID → { url, width }
+let pdfDocument = null, pdfFor = null, backgroundTimer, backgroundQueue = Promise.resolve();
+const LOW_WIDTH = 700, MAX_WIDTH = 2400;
+async function loadPdf(canvas) {
+  if (pdfFor === canvas.id) return;
+  pdfDocument?.destroy();
+  pdfDocument = null;
+  pdfFor = canvas.id;
+  for (const background of backgrounds.values()) URL.revokeObjectURL(background.url);
+  backgrounds.clear();
+  if (!canvas.pdf) return;
+  status.textContent = 'Loading PDF · ' + canvas.title;
+  const pdfjs = await import('/vendor/pdfjs/pdf.min.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+  const loaded = await pdfjs.getDocument({
+    url: '/api/canvases/' + canvas.id + '/pdf', httpHeaders: { Authorization: 'Bearer ' + deviceToken },
+    standardFontDataUrl: '/vendor/pdfjs/standard_fonts/', cMapUrl: '/vendor/pdfjs/cmaps/', cMapPacked: true,
+    wasmUrl: '/vendor/pdfjs/wasm/', iccUrl: '/vendor/pdfjs/iccs/', isEvalSupported: false
+  }).promise;
+  if (pdfFor !== canvas.id) return loaded.destroy();
+  pdfDocument = loaded;
+  status.textContent = 'Opened · ' + canvas.title;
+  scheduleBackgrounds();
+  void uploadPreviewImages(canvas);
+}
+function scheduleBackgrounds() {
+  if (!pdfDocument) return;
+  clearTimeout(backgroundTimer);
+  backgroundTimer = setTimeout(() => { backgroundQueue = backgroundQueue.then(updateBackgrounds).catch(() => {}); }, 150);
+}
+async function renderPage(page, width, type = 'image/png') {
+  const pdfPage = await pdfDocument.getPage(page.pdfPage);
+  const viewport = pdfPage.getViewport({ scale: width / pdfPage.getViewport({ scale: 1 }).width });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  await pdfPage.render({ canvasContext: canvas.getContext('2d'), canvas, viewport }).promise;
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, type, 0.75));
+  canvas.width = canvas.height = 0; // frees the bitmap right away on iOS
+  return blob;
+}
+async function updateBackgrounds() {
+  if (!pdfDocument || !view) return;
+  const { width, height } = size();
+  const ratio = window.devicePixelRatio || 1;
+  const visibleTop = view.y - height / view.scale, visibleBottom = view.y + 2 * height / view.scale;
+  for (const [index, page] of pages.entries()) {
+    if (page.pdfPage === undefined) continue;
+    const top = pageTop(index);
+    const visible = top < visibleBottom && top + page.height > visibleTop;
+    // Sharp enough for the screen, in coarse steps so small zooms reuse renders.
+    const wanted = visible ? Math.min(MAX_WIDTH, Math.max(LOW_WIDTH, 2 ** Math.ceil(Math.log2(page.width * view.scale * ratio / 100)) * 100)) : LOW_WIDTH;
+    const current = backgrounds.get(page.id);
+    if (current?.width === wanted || (!visible && current)) continue;
+    const blob = await renderPage(page, wanted);
+    if (!pdfDocument || !pages.includes(page)) return;
+    if (current) URL.revokeObjectURL(current.url);
+    const url = URL.createObjectURL(blob);
+    backgrounds.set(page.id, { url, width: wanted });
+    sheet.querySelector('image[data-page="' + page.id + '"]')?.setAttribute('href', url);
+  }
+}
+// The Obsidian preview needs page images the server cannot render itself.
+async function uploadPreviewImages(canvas) {
+  const cached = new Set(canvas.cachedBackgrounds || []);
+  for (const page of pages) {
+    if (page.pdfPage === undefined || cached.has(page.id) || pdfFor !== canvas.id) continue;
+    try {
+      const image = await renderPage(page, 600, 'image/jpeg');
+      await fetch('/api/canvases/' + canvas.id + '/backgrounds/' + page.id, { method: 'PUT', headers: { Authorization: 'Bearer ' + deviceToken, 'Content-Type': 'image/jpeg' }, body: image });
+    } catch { /* the preview shows blank pages until a later visit */ }
+  }
 }
 // Zoom around a screen point, so the spot under the fingers stays put.
 function zoomAt(clientX, clientY, factor) {
@@ -579,6 +662,7 @@ async function flushSave() {
 }
 function adopt(document, contents) {
   currentDocument = { id: document.id, title: document.title, revision: document.revision };
+  loadPdf(document).catch(error => report('The PDF could not be loaded: ' + error.message, true));
   try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
   pages = contents;
   past = []; future = []; pendingSave = null; saveBlocked = false;
@@ -592,7 +676,7 @@ async function openCanvas(id) {
   if (recovery) {
     const saved = JSON.parse(recovery);
     // Records from before multi-page documents hold only the first page's strokes.
-    adopt(saved.document, saved.pages || [{ ...document.pages[0], strokes: saved.strokes }]);
+    adopt({ ...document, revision: saved.document.revision }, saved.pages || [{ ...document.pages[0], strokes: saved.strokes }]);
     pendingSave = saved.request?.pages ? saved.request : null;
     report('Recovered local edits. Saving them to the vault.');
     await flushSave();

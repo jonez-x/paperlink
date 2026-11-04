@@ -27,7 +27,7 @@ class CliError extends Error {}
 
 // ── Arguments ────────────────────────────────────────────────────────────────
 const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start', 'all', 'yes']);
-const VALUE_FLAGS = new Set(['port', 'title', 'from-browser']);
+const VALUE_FLAGS = new Set(['port', 'title', 'from-browser', 'pdf']);
 
 export function parseArguments(argv) {
   const flags = {};
@@ -218,21 +218,24 @@ async function findCanvas(ctx, query, { allowMissing = false } = {}) {
 }
 
 // ── Interactive helpers ──────────────────────────────────────────────────────
-function completeDirectory(value) {
+// Tab completion for folders, and with `files` also for matching files.
+function completeDirectory(value, files = null) {
   const expanded = expandHome(value || '~/');
   const base = expanded.endsWith('/') ? expanded : path.dirname(expanded);
   const prefix = expanded.endsWith('/') ? '' : path.basename(expanded);
   let names;
   try {
     names = readdirSync(base, { withFileTypes: true })
-      .filter(entry => (entry.isDirectory() || (entry.isSymbolicLink() && statSync(path.join(base, entry.name), { throwIfNoEntry: false })?.isDirectory())) &&
+      .filter(entry => (entry.isDirectory() || (entry.isSymbolicLink() && statSync(path.join(base, entry.name), { throwIfNoEntry: false })?.isDirectory()) ||
+        (files && entry.isFile() && files.test(entry.name))) &&
         entry.name.startsWith(prefix) && (prefix.startsWith('.') || !entry.name.startsWith('.')))
       .map(entry => entry.name);
   } catch { return value; }
   if (!names.length) return value;
   let common = names[0];
   for (const name of names) while (!name.startsWith(common)) common = common.slice(0, -1);
-  const completed = path.join(base, common) + (names.length === 1 ? '/' : '');
+  const single = names.length === 1 && statSync(path.join(base, common), { throwIfNoEntry: false })?.isDirectory();
+  const completed = path.join(base, common) + (single ? '/' : '');
   return value?.startsWith('~') && completed.startsWith(homedir()) ? '~' + completed.slice(homedir().length) : completed;
 }
 
@@ -353,26 +356,37 @@ function statusCard(ctx, status) {
 async function cmdNew(ctx, positional) {
   const name = positional.join(' ');
   let title = ctx.flags.title;
+  let pdf = ctx.flags.pdf ? path.resolve(expandHome(ctx.flags.pdf)) : null;
   let file;
-  if (name && !(existsSync(path.resolve(expandHome(name))) && statSync(path.resolve(expandHome(name))).isDirectory())) {
+  const isFolder = name && existsSync(path.resolve(expandHome(name))) && statSync(path.resolve(expandHome(name))).isDirectory();
+  if (name && !isFolder) {
     file = canvasPath(expandHome(name));
+  } else if (pdf && !ctx.interactive) {
+    // `paper new --pdf Sheet.pdf [folder]`: named after the PDF.
+    file = path.join(isFolder ? path.resolve(expandHome(name)) : process.cwd(), path.basename(pdf, path.extname(pdf)) + EXTENSION);
   } else {
-    if (!ctx.interactive) throw new CliError('Specify where to create it: paper new "<folder>/<name>" [--title TITLE].');
-    title ??= await ui.input({ message: 'Title', placeholder: 'e.g. Analysis sheet 3', validate: value => value ? (value.length > 200 ? 'At most 200 characters.' : '') : 'Enter a title.' });
+    if (!ctx.interactive) throw new CliError('Specify where to create it: paper new "<folder>/<name>" [--title TITLE] [--pdf FILE].');
+    if (!pdf) {
+      const answer = await ui.input({ message: 'PDF to write on', placeholder: 'optional · enter for blank pages', complete: value => completeDirectory(value, /\.pdf$/i),
+        validate: value => !value || (/\.pdf$/i.test(value) && existsSync(path.resolve(expandHome(value)))) ? '' : 'Choose an existing PDF file, or leave empty.' });
+      if (answer === null) return;
+      if (answer) pdf = path.resolve(expandHome(answer));
+    }
+    title ??= await ui.input({ message: 'Title', initial: pdf ? path.basename(pdf, path.extname(pdf)) : '', placeholder: 'e.g. Analysis sheet 3', validate: value => value ? (value.length > 200 ? 'At most 200 characters.' : '') : 'Enter a title.' });
     if (title === null) return;
     const folder = name ? path.resolve(expandHome(name)) : await pickFolder();
     if (folder === null) return;
     file = path.join(folder, safeFileName(title) + EXTENSION);
   }
-  const canvas = await createCanvas(file, title);
+  const canvas = await createCanvas(file, title, { pdf });
   await remember(canvas);
   const obsidian = await obsidianFiles(ctx, canvas.path, canvas);
   // The canvas exists now; a missing server only means no link yet.
   const status = await (ctx.interactive ? requireServer(ctx) : callServer(ctx, 'status')).catch(() => null);
   const opened = status ? await callServer(ctx, 'open', { id: canvas.id }).catch(() => null) : null;
   jsonQr(ctx, opened?.links);
-  emit(ctx, { id: canvas.id, title: canvas.title, path: canvas.path, note: obsidian?.note ?? null, links: opened?.links ?? [] }, () =>
-    '\n' + canvasCard(canvas, 'Canvas created') + (obsidian ? '\n' + ok('Obsidian note ' + c.muted('· ' + path.basename(obsidian.note))) : '') +
+  emit(ctx, { id: canvas.id, title: canvas.title, path: canvas.path, pages: canvas.pages.length, pdf: canvas.pdf?.file ?? null, note: obsidian?.note ?? null, links: opened?.links ?? [] }, () =>
+    '\n' + canvasCard(canvas, 'Canvas created') + (canvas.pdf ? '\n' + ok(canvas.pages.length + ' PDF page' + (canvas.pages.length === 1 ? '' : 's') + c.muted(' · ' + canvas.pdf.file + (canvas.pdf.copied ? ' copied next to it' : ''))) : '') + (obsidian ? '\n' + ok('Obsidian note ' + c.muted('· ' + path.basename(obsidian.note))) : '') +
     (opened ? qrSection(ctx, opened.links, 'Scan to start writing · saves automatically')
       : '\n  ' + c.muted('Start the server with `paper start` to get a QR code for this canvas.')));
 }
@@ -720,7 +734,7 @@ function helpText() {
     '    paper <command> [options]',
     '',
     '  ' + c.bold('Canvases') + c.muted('  · a canvas is a ' + EXTENSION + ' file, wherever you keep it'),
-    command('new "<folder>/<name>" [--title TITLE]', 'create a canvas file, print its QR code'),
+    command('new "<folder>/<name>" [--pdf FILE]', 'create a canvas (from a PDF), print its QR code'),
     command('open <file|id|title>', 'print links and QR code for a canvas'),
     command('list', 'canvases created or opened on this computer'),
     command('move <canvas> <folder/ | new path>', 'move or rename with note and preview'),

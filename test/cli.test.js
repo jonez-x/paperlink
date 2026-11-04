@@ -8,6 +8,8 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { readCanvas } from '../src/store.js';
 import { createCanvas } from '../src/documents.js';
+import { makePdf } from './pdf-fixture.js';
+import { existsSync } from 'node:fs';
 import { parseArguments } from '../src/cli.js';
 const exec = promisify(execFile);
 
@@ -200,6 +202,71 @@ test('foreground serve prints connection links for scripts', async () => {
   } finally {
     server.kill('SIGTERM');
     if (server.exitCode === null) await once(server, 'exit');
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('PDF worksheets: pages from the PDF, served to paired devices, moved and deleted with the canvas', async () => {
+  const { root, paper, fails } = await sandbox();
+  const port = '18879';
+  try {
+    await paper('config', 'set', 'port', port);
+    await mkdir(path.join(root, 'Vault', '.obsidian'), { recursive: true });
+    await mkdir(path.join(root, 'Downloads'));
+    await writeFile(path.join(root, 'Downloads', 'Sheet 3.pdf'), makePdf([[595, 842], [842, 595]]));
+    await writeFile(path.join(root, 'Downloads', 'broken.pdf'), 'not a pdf');
+    assert.match(await fails('new', 'Vault/Bad', '--pdf', 'Downloads/broken.pdf'), /Not a readable PDF/);
+    assert.ok(!existsSync(path.join(root, 'Vault', 'Bad.paperlink')), 'nothing is created for a broken PDF');
+
+    // A PDF from elsewhere is copied next to the canvas; pages keep its aspect ratios.
+    const created = await paper('new', 'Vault/Math/Sheet 3', '--pdf', 'Downloads/Sheet 3.pdf');
+    assert.equal(created.pages, 2);
+    assert.equal(created.pdf, 'Sheet 3.pdf');
+    const document = await readCanvas(created.path, created.id);
+    assert.deepEqual(document.pages.map(page => [page.width, page.height, page.pdfPage]), [[900, 1273.6, 1], [900, 636, 2]]);
+    assert.deepEqual(document.pdf, { file: 'Sheet 3.pdf', copied: true });
+    // A PDF already in the target folder is used in place.
+    await mkdir(path.join(root, 'Vault', 'Physics'));
+    await writeFile(path.join(root, 'Vault', 'Physics', 'Lab.pdf'), makePdf([[595, 842]]));
+    const inPlace = await paper('new', '--pdf', 'Vault/Physics/Lab.pdf', 'Vault/Physics');
+    assert.equal(inPlace.path, path.join(root, 'Vault', 'Physics', 'Lab.paperlink'), 'named after the PDF');
+    assert.equal((await readCanvas(inPlace.path)).pdf.copied, false);
+
+    await paper('start');
+    const base = 'http://127.0.0.1:' + port;
+    const code = (await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1];
+    const { token } = await (await fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json();
+    const auth = { Authorization: 'Bearer ' + token };
+    const pdf = await fetch(base + '/api/canvases/' + created.id + '/pdf', { headers: auth });
+    assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+    assert.ok(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).equals(Buffer.from('%PDF-')));
+    assert.equal((await fetch(base + '/api/canvases/' + created.id + '/pdf')).status, 401, 'the PDF needs a paired device');
+    assert.equal((await fetch(base + '/vendor/pdfjs/pdf.min.mjs')).headers.get('content-type'), 'text/javascript');
+    for (const route of ['/vendor/pdfjs/../../../package.json', '/vendor/pdfjs/%2e%2e/%2e%2e/package.json', '/vendor/pdfjs/cmaps/../../../src/cli.js']) {
+      assert.notEqual((await fetch(base + route)).status, 200, route);
+    }
+
+    // Page images for the Obsidian preview: JPEG only, PDF pages only.
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const upload = (pageId, image) => fetch(base + '/api/canvases/' + created.id + '/backgrounds/' + pageId, { method: 'PUT', headers: { ...auth, 'Content-Type': 'image/jpeg' }, body: image });
+    assert.equal((await upload(document.pages[0].id, jpeg)).status, 200);
+    assert.equal((await upload(document.pages[0].id, Buffer.from('<svg/>'))).status, 400);
+    assert.equal((await upload('unknown-page', jpeg)).status, 404);
+    assert.deepEqual((await (await fetch(base + '/api/canvases/' + created.id, { headers: auth })).json()).cachedBackgrounds, [document.pages[0].id]);
+    // A browser cannot drop PDF pages.
+    const drop = await fetch(base + '/api/canvases/' + created.id, { method: 'PUT', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: 0, operationId: 'drop', pages: [document.pages[1]] }) });
+    assert.equal(drop.status, 400);
+    await paper('stop');
+
+    // Moving takes the copied PDF along; deleting trashes it, an in-place PDF stays.
+    await rm(inPlace.path);
+    await paper('forget', inPlace.id);
+    const moved = await paper('move', created.id, 'Vault/Archive/');
+    assert.deepEqual((await readdir(path.join(root, 'Vault', 'Archive'))).sort(), ['Sheet 3.md', 'Sheet 3.paperlink', 'Sheet 3.pdf']);
+    assert.equal((await paper('delete', moved.id, '--yes'))[0].trashed.length, 4);
+    assert.deepEqual(await readdir(path.join(root, 'Vault', 'Archive')), []);
+  } finally {
+    await paper('stop').catch(() => {});
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -2,6 +2,7 @@ import { access, mkdir, open, readFile, readdir, rename, unlink, writeFile } fro
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { canvasBase, obsidianVault, safeFileName } from './documents.js';
+import { stateDirectory } from './config.js';
 
 // Inside an Obsidian vault, "<Name>.paperlink" gets two companions:
 //   <Name>.md        – a note next to it embedding the preview, created once and
@@ -105,13 +106,28 @@ async function replaceFile(filename, content) {
 
 const openLine = link => '[Open in Paperlink](' + link + ')';
 
+// Small JPEG renderings of PDF pages, sent by the browser (Node cannot render
+// PDFs without native modules). Kept outside the vault, keyed by canvas.
+export const backgroundDirectory = id => path.join(stateDirectory(), 'backgrounds', id);
+export const backgroundPath = (id, pageId) => path.join(backgroundDirectory(id), pageId + '.jpg');
+
+async function loadBackgrounds(document) {
+  const backgrounds = {};
+  for (const page of document.pages) {
+    if (page.pdfPage === undefined) continue;
+    const image = await readFile(backgroundPath(document.id, page.id)).catch(() => null);
+    if (image) backgrounds[page.id] = 'data:image/jpeg;base64,' + image.toString('base64');
+  }
+  return backgrounds;
+}
+
 // `link` is the canvas link for the note (see devices.js); null when unknown.
 export async function writePreview(file, document, { link = null } = {}) {
   const vault = await obsidianVault(file);
   if (!vault) return null;
   const filename = previewPath(vault, document.id);
   await mkdir(path.dirname(filename), { recursive: true });
-  await replaceFile(filename, renderPreview(document));
+  await replaceFile(filename, renderPreview(document, { backgrounds: await loadBackgrounds(document) }));
   await upgradeNote(file, document.id, link);
   return filename;
 }

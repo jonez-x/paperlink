@@ -1,8 +1,8 @@
-import { access, copyFile, mkdir, rename, unlink } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { canvasBase, findCanvasFiles, isCanvasFile, obsidianVault } from './documents.js';
-import { findNote, findNoteInVault, freeName, legacyPreviewName, previewPath } from './preview.js';
+import { backgroundDirectory, findNote, findNoteInVault, freeName, legacyPreviewName, previewPath } from './preview.js';
 import { readCanvas } from './store.js';
 
 const exists = file => access(file).then(() => true, () => false);
@@ -20,7 +20,7 @@ async function moveFile(from, to, { overwrite = false } = {}) {
 // Moves or renames a canvas together with its note.
 export async function moveCanvas(file, id, destination, { withNote = true } = {}) {
   if (!isCanvasFile(destination)) throw new Error('The destination must end in .paperlink.');
-  await readCanvas(file, id);
+  const document = await readCanvas(file, id);
   if (path.resolve(destination) === path.resolve(file)) return { path: file, note: withNote ? await findNote(path.dirname(file), id) : null };
   if (await exists(destination)) throw new Error('A file already exists at ' + destination + '.');
   const from = path.dirname(file), to = path.dirname(destination);
@@ -33,6 +33,19 @@ export async function moveCanvas(file, id, destination, { withNote = true } = {}
   // Previews live in the vault's preview folder; only ones from earlier versions sit next to the canvas.
   const legacyPreview = path.join(from, legacyPreviewName(id));
   if (from !== to && await exists(legacyPreview)) await moveFile(legacyPreview, path.join(to, legacyPreviewName(id)), { overwrite: true });
+  // The PDF behind the pages travels along; a name clash gets a free name.
+  const pdf = document.pdf && path.join(from, document.pdf.file);
+  if (pdf && from !== to && await exists(pdf)) {
+    const target = await freeName(to, path.basename(pdf, path.extname(pdf)), path.extname(pdf));
+    await moveFile(pdf, target);
+    if (path.basename(target) !== document.pdf.file) {
+      const stored = JSON.parse(await readFile(destination, 'utf8'));
+      stored.pdf.file = path.basename(target);
+      const temporary = destination + '.pdf-rename.tmp';
+      await writeFile(temporary, JSON.stringify(stored, null, 2) + '\n');
+      await rename(temporary, destination);
+    }
+  }
   let movedNote = null;
   if (note) {
     // A note still named like the canvas follows a rename; a name the user chose stays.
@@ -91,13 +104,17 @@ export async function trash(file) {
 }
 
 // Moves a canvas, its note and its preview to the trash.
+// A PDF that was copied in goes too; one the user kept there already stays.
 export async function deleteCanvas(file, id) {
   const removed = [];
+  const document = await readCanvas(file, id).catch(() => null);
   const vault = await obsidianVault(file);
   const note = await findNote(path.dirname(file), id);
   const previews = [vault && previewPath(vault, id), path.join(path.dirname(file), legacyPreviewName(id))].filter(Boolean);
-  for (const candidate of [file, note, ...previews]) {
+  const pdf = document?.pdf?.copied ? path.join(path.dirname(file), document.pdf.file) : null;
+  for (const candidate of [file, note, pdf, ...previews]) {
     if (candidate && await exists(candidate)) { await trash(candidate); removed.push(candidate); }
   }
+  await rm(backgroundDirectory(id), { recursive: true, force: true });
   return removed;
 }
