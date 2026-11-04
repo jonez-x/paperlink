@@ -14,6 +14,8 @@ cd paperlink
 npm link
 ```
 
+On Windows, if PowerShell says running scripts is disabled, allow them once for your user with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `npm.cmd` and `paper.cmd` instead.
+
 ## Use
 
 ```sh
