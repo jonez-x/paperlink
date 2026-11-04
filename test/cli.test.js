@@ -416,7 +416,7 @@ test('assistant commands: inspect, snapshots of a region, notes that appear live
 });
 
 test('request feedback: a configured assistant runs with page and region, answers with live notes', async () => {
-  const { root, paper } = await sandbox();
+  const { root, env, paper } = await sandbox();
   const port = '18882';
   try {
     await paper('config', 'set', 'port', port);
@@ -429,7 +429,10 @@ test('request feedback: a configured assistant runs with page and region, answer
       "const id = prompt.match(/ID ([a-f0-9-]{36})/)[1];",
       "const question = (prompt.match(/\"\"\"(.*)\"\"\"/) || [])[1] || 'none';",
       "const region = (prompt.match(/--region ([0-9,]+)/) || [])[1] || 'page';",
-      "execFileSync('paper', ['annotate', id, '--text', question + ' @ ' + region, '--author', 'Stand-in', '--json']);"
+      "const args = ['annotate', id, '--text', question + ' @ ' + region, '--author', 'Stand-in', '--json'];",
+      // Windows starts the paper.cmd shim only through a shell (checked below); Git Bash, which Claude Code uses there, runs the sh shim.
+      "if (process.platform === 'win32') execFileSync(process.execPath, [" + JSON.stringify(path.resolve('bin/paper.js')) + ", ...args]);",
+      "else execFileSync('paper', args);"
     ].join('\n'));
     await paper('start');
     const base = 'http://127.0.0.1:' + port;
@@ -466,6 +469,10 @@ test('request feedback: a configured assistant runs with page and region, answer
     const note = events.find(event => event.ops)?.ops[0].annotation;
     assert.equal(note.text, 'Is step 2 right? @ 100,200,300,150');
     assert.equal(note.author, 'Stand-in');
+    if (process.platform === 'win32') {
+      const { stdout } = await exec('cmd.exe', ['/d', '/c', path.join(root, 'config', 'bin', 'paper.cmd'), '--version', '--json'], { env });
+      assert.ok(JSON.parse(stdout).version, 'paper.cmd shim runs the CLI');
+    }
     assert.match(await paper('config', 'set', 'assistant', 'off').then(config => String(config.assistant)), /null/);
   } finally {
     await paper('stop').catch(() => {});
