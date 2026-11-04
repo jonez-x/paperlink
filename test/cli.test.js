@@ -354,3 +354,62 @@ test('live sync: operations from several devices merge, replay safely and stream
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('assistant commands: inspect, snapshots of a region, notes that appear live and can be removed', async () => {
+  const { root, paper, fails } = await sandbox();
+  const port = '18881';
+  try {
+    await paper('config', 'set', 'port', port);
+    const canvas = await paper('new', 'Answers');
+    // Without a server, notes go straight into the file.
+    const offline = await paper('annotate', 'Answers', '--text', 'Check the sign in line 2', '--at', '120,300', '--width', '300');
+    assert.equal(offline.stale, false);
+    let info = await paper('inspect', 'Answers');
+    assert.equal(info.pages.length, 1);
+    assert.deepEqual(info.annotations.map(note => [note.text, note.x, note.y, note.width, note.pageNumber, note.author]), [['Check the sign in line 2', 120, 300, 300, 1, 'Assistant']]);
+    assert.match(await fails('annotate', 'Answers', '--text', 'x', '--page', '2'), /--page must be between 1 and 1/);
+    assert.match(await fails('annotate', 'Answers', '--text', 'x', '--at', '1'), /--at expects 2/);
+
+    // With a server, a note reaches open tabs at once; an older --revision marks it stale.
+    await paper('start');
+    const base = 'http://127.0.0.1:' + port;
+    const code = (await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1];
+    const { token } = await (await fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json();
+    const response = await fetch(base + '/api/canvases/' + canvas.id + '/events', { headers: { Authorization: 'Bearer ' + token } });
+    const reader = response.body.getReader();
+    const next = async () => { let text = ''; while (!text.includes('\n\n')) text += new TextDecoder().decode((await reader.read()).value); return JSON.parse(text.slice(6, text.indexOf('\n\n'))); };
+    assert.equal((await next()).live, true);
+    const live = await paper('annotate', canvas.id, '--text', 'Nice!\\nNow simplify.', '--revision', '0', '--author', 'Claude');
+    assert.equal(live.stale, true);
+    const event = await next();
+    assert.equal(event.ops[0].type, 'addAnnotation');
+    assert.equal(event.ops[0].annotation.text, 'Nice!\nNow simplify.');
+    assert.equal(event.ops[0].annotation.author, 'Claude');
+    await reader.cancel();
+    info = await paper('inspect', canvas.id);
+    assert.equal(info.annotations.length, 2);
+
+    // Snapshots: a region of a page as PDF (exact size) and as PNG on macOS.
+    const pdf = await paper('snapshot', 'Answers', '--region', '0,0,450,300', '--output', path.join(root, 'region.pdf'));
+    globalThis.DOMMatrix ??= class DOMMatrix {};
+    const { getDocument, GlobalWorkerOptions } = await import('../public/vendor/pdfjs/pdf.min.mjs');
+    GlobalWorkerOptions.workerSrc = new URL('../public/vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+    const snapshot = await getDocument({ data: new Uint8Array(await readFile(pdf.path)), verbosity: 0 }).promise;
+    const { width, height } = (await snapshot.getPage(1)).getViewport({ scale: 1 });
+    await snapshot.destroy();
+    assert.deepEqual([Math.round(width * 10) / 10, Math.round(height * 10) / 10], [297.6, 198.4]);
+    if (process.platform === 'darwin') {
+      const png = await paper('snapshot', 'Answers');
+      assert.ok((await readFile(png.path)).subarray(1, 4).equals(Buffer.from('PNG')));
+    }
+
+    // Removing by ID prefix, then all.
+    assert.deepEqual((await paper('annotate', 'Answers', '--remove', live.id.slice(0, 8))).removed, [live.id]);
+    assert.equal((await paper('annotate', 'Answers', '--clear')).removed.length, 1);
+    assert.deepEqual((await paper('inspect', 'Answers')).annotations, []);
+    assert.match(await fails('annotate', 'Answers', '--clear'), /no notes/);
+  } finally {
+    await paper('stop').catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -2,9 +2,11 @@
 //   humans: `paper` opens a keyboard-driven menu; commands ask for missing input.
 //   scripts and AI agents: commands with flags, JSON on stdout when not in a
 //   terminal (or with --json), errors as JSON on stderr and a non-zero exit code.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
 import { closeSync, existsSync, openSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, rename as renameFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +17,7 @@ import { forget, loadRegistry, relocate, remember } from './registry.js';
 import { deleteCanvas, findMoved, moveCanvas } from './move.js';
 import { canvasLink, loadDevices, saveDevices } from './devices.js';
 import { defaultExportPath, exportPdf } from './export.js';
-import { readCanvas } from './store.js';
+import { readCanvas, saveOperations, validAnnotation } from './store.js';
 import { writeObsidianFiles } from './preview.js';
 import { renderQr } from './qr.js';
 import * as ui from './tui.js';
@@ -27,8 +29,8 @@ const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 class CliError extends Error {}
 
 // ── Arguments ────────────────────────────────────────────────────────────────
-const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start', 'all', 'yes']);
-const VALUE_FLAGS = new Set(['port', 'title', 'from-browser', 'pdf', 'output']);
+const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start', 'all', 'yes', 'clear']);
+const VALUE_FLAGS = new Set(['port', 'title', 'from-browser', 'pdf', 'output', 'page', 'at', 'region', 'width', 'text', 'author', 'revision', 'remove']);
 
 export function parseArguments(argv) {
   const flags = {};
@@ -462,6 +464,93 @@ async function cmdExport(ctx, positional) {
     ok('Exported ' + canvas.title + c.muted(' · ' + result.pages + ' page' + (result.pages === 1 ? '' : 's') + ' · ' + Math.max(1, Math.round(result.bytes / 1024)) + ' KB')) + '\n  ' + prettyPath(result.path));
 }
 
+// ── For assistants: look at a canvas and leave notes ─────────────────────────
+// Coordinates are page units: 900 wide, origin at the page's top left.
+const numbers = (text, count, name) => {
+  const values = String(text).split(',').map(Number);
+  if (values.length !== count || values.some(value => !Number.isFinite(value))) throw new CliError('--' + name + ' expects ' + count + ' comma-separated numbers.');
+  return values;
+};
+const pageNumber = (ctx, document) => {
+  const number = Number(ctx.flags.page ?? 1);
+  if (!Number.isInteger(number) || number < 1 || number > document.pages.length) throw new CliError('--page must be between 1 and ' + document.pages.length + '.');
+  return number;
+};
+
+async function cmdInspect(ctx, positional) {
+  const canvas = await findCanvas(ctx, positional.join(' '));
+  if (!canvas) return;
+  const document = await readCanvas(canvas.path, canvas.id);
+  const info = {
+    id: document.id, title: document.title, path: canvas.path, revision: document.revision, pdf: document.pdf?.file ?? null,
+    pages: document.pages.map((page, index) => ({ number: index + 1, id: page.id, width: page.width, height: page.height, strokes: page.strokes.length, pdfPage: page.pdfPage ?? null })),
+    annotations: (document.annotations || []).map(note => ({ ...note, pageNumber: document.pages.findIndex(page => page.id === note.page) + 1 }))
+  };
+  emit(ctx, info, () => '\n' + canvasCard(canvas) + '\n' + info.pages.map(page => '  ' + c.accent('▪') + ' Page ' + page.number + c.muted(' · ' + page.width + '×' + page.height + ' · ' + page.strokes + ' stroke' + (page.strokes === 1 ? '' : 's') + (page.pdfPage ? ' · PDF page ' + page.pdfPage : ''))).join('\n') +
+    (info.annotations.length ? '\n\n' + info.annotations.map(note => '  ' + c.yellow('✎') + ' p' + note.pageNumber + ' ' + note.text.split('\n')[0].slice(0, 60) + c.muted(' · ' + note.id.slice(0, 8))).join('\n') : '') + '\n');
+}
+
+// One page (or a region of it) as an image, so an assistant can read the handwriting.
+async function cmdSnapshot(ctx, positional) {
+  const canvas = await findCanvas(ctx, positional.join(' '));
+  if (!canvas) return;
+  const document = await readCanvas(canvas.path, canvas.id);
+  const number = pageNumber(ctx, document);
+  const [x, y, width, height] = ctx.flags.region ? numbers(ctx.flags.region, 4, 'region') : [];
+  const region = ctx.flags.region ? { x, y, width, height } : undefined;
+  if (region && (region.width <= 0 || region.height <= 0)) throw new CliError('--region needs a positive width and height.');
+  const png = process.platform === 'darwin';
+  const output = ctx.flags.output ? path.resolve(expandHome(ctx.flags.output)) : path.join(stateDirectory(), 'snapshots', canvas.id.slice(0, 8) + '-p' + number + (png ? '.png' : '.pdf'));
+  await mkdir(path.dirname(output), { recursive: true });
+  if (/\.pdf$/i.test(output)) await exportPdf(canvas.path, canvas.id, output, { pages: [number], region });
+  else {
+    if (!png) throw new CliError('PNG snapshots need macOS; use --output <file>.pdf.');
+    // Quick Look renders the PDF as vectors at the requested size.
+    const work = path.join(stateDirectory(), 'snapshots', 'work-' + randomBytes(6).toString('hex'));
+    await mkdir(work, { recursive: true });
+    try {
+      const pdf = path.join(work, 'page.pdf');
+      await exportPdf(canvas.path, canvas.id, pdf, { pages: [number], region });
+      await promisify(execFile)('qlmanage', ['-t', '-s', '1600', '-o', work, pdf], { timeout: 30000 });
+      await renameFile(pdf + '.png', output).catch(() => { throw new CliError('Could not render a PNG; try --output <file>.pdf.'); });
+    } finally { await rm(work, { recursive: true, force: true }); }
+  }
+  emit(ctx, { id: canvas.id, page: number, region: region ?? null, revision: document.revision, path: output }, () => ok('Snapshot of page ' + number + c.muted(' · revision ' + document.revision)) + '\n  ' + prettyPath(output));
+}
+
+// Edits from the CLI go through the running server (live in open tabs) or straight to the file.
+async function applyCanvasOps(ctx, canvas, ops) {
+  const operationId = 'cli-' + randomBytes(12).toString('hex');
+  return (await callServer(ctx, 'ops', { id: canvas.id, operationId, ops })) ?? saveOperations(canvas.path, canvas.id, { operationId, ops });
+}
+
+async function cmdAnnotate(ctx, positional) {
+  const canvas = await findCanvas(ctx, positional.join(' '));
+  if (!canvas) return;
+  const document = await readCanvas(canvas.path, canvas.id);
+  const existing = document.annotations || [];
+  if (ctx.flags.clear || ctx.flags.remove) {
+    const removed = ctx.flags.clear ? existing : existing.filter(note => note.id === ctx.flags.remove || note.id.startsWith(String(ctx.flags.remove)));
+    if (!removed.length) throw new CliError(ctx.flags.clear ? 'There are no notes.' : 'No note matches ' + ctx.flags.remove + '. See `paper inspect`.');
+    const result = await applyCanvasOps(ctx, canvas, removed.map(note => ({ type: 'removeAnnotation', id: note.id, annotation: note })));
+    return emit(ctx, { removed: removed.map(note => note.id), revision: result.revision }, () => ok('Removed ' + removed.length + ' note' + (removed.length === 1 ? '' : 's')));
+  }
+  if (!ctx.flags.text) throw new CliError('Use: paper annotate <canvas> --text "…" [--page N] [--at X,Y] [--width W] [--revision R], or --remove <id> / --clear.');
+  const number = pageNumber(ctx, document);
+  const [x, y] = ctx.flags.at ? numbers(ctx.flags.at, 2, 'at') : [40, 40];
+  const seen = ctx.flags.revision !== undefined ? Number(ctx.flags.revision) : document.revision;
+  const annotation = {
+    id: randomUUID(), page: document.pages[number - 1].id, x, y,
+    ...(ctx.flags.width !== undefined && { width: Number(ctx.flags.width) }),
+    text: String(ctx.flags.text).replace(/\\n/g, '\n'), author: ctx.flags.author || 'Assistant', revision: seen,
+    // Written for an older state of the page: shown, but marked.
+    ...(seen !== document.revision && { stale: true }), createdAt: new Date().toISOString()
+  };
+  if (!validAnnotation(annotation)) throw new CliError('Invalid note: text up to 4000 characters, width 40–2000, coordinates in page units.');
+  const result = await applyCanvasOps(ctx, canvas, [{ type: 'addAnnotation', annotation }]);
+  emit(ctx, { id: annotation.id, page: number, revision: result.revision, stale: Boolean(annotation.stale) }, () => ok('Note added to page ' + number + (annotation.stale ? c.muted(' · marked as written for revision ' + seen) : '')));
+}
+
 // Canvases named on the command line, or all of them with --all.
 async function targets(ctx, positional) {
   if (ctx.flags.all) return knownCanvases();
@@ -759,6 +848,12 @@ function helpText() {
     command('delete <canvas> | --all [--yes]', 'move canvas, note and preview to the Trash'),
     command('forget <canvas> | --all', 'remove from the list, keep the file'),
     command('export <canvas> [--output FILE]', 'PDF with your handwriting, for handing in'),
+    '',
+    '  ' + c.bold('For assistants') + c.muted('  · page units: 900 wide, origin top left'),
+    command('inspect <canvas>', 'pages, stroke counts, notes, revision'),
+    command('snapshot <canvas> [--page N] [--region X,Y,W,H]', 'page as PNG (or --output x.pdf) to read the writing'),
+    command('annotate <canvas> --text "…" [--page N] [--at X,Y]', 'add a note on the assistant layer (--revision R)'),
+    command('annotate <canvas> --remove <id> | --clear', 'remove notes'),
     command('preview [file|id|title]', 'write Obsidian notes and previews'),
     command('drafts', 'unsaved drafts from connected tabs'),
     command('import "<folder>/<name>" --from-browser <id>', 'save a draft as a canvas'),
@@ -823,6 +918,9 @@ export async function main(argv) {
       case 'unpair': return await cmdUnpair(ctx, rest);
       case 'preview': return await cmdPreview(ctx, rest);
       case 'export': return await cmdExport(ctx, rest);
+      case 'inspect': return await cmdInspect(ctx, rest);
+      case 'snapshot': return await cmdSnapshot(ctx, rest);
+      case 'annotate': return await cmdAnnotate(ctx, rest);
       case 'drafts': return await cmdDrafts(ctx);
       case 'import': return await cmdImport(ctx, rest);
       case 'init': throw new CliError('Libraries are gone: a canvas is a ' + EXTENSION + ' file wherever you create it. Try `paper new "<folder>/<name>"`.');

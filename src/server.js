@@ -92,7 +92,8 @@ export async function serve({ port, lan, obsidian = true }) {
   }
   async function subscribe(req, res, id) {
     const file = await locate(id);
-    const since = Number(new URL(req.url, 'http://local').searchParams.get('since'));
+    const given = new URL(req.url, 'http://local').searchParams.get('since');
+    const since = given === null ? NaN : Number(given); // without `since`: live from now on
     const { revision } = await serialize(() => readCanvas(file, id));
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
     const missed = (history.get(id) || []).filter(event => event.revision > since);
@@ -242,6 +243,16 @@ export async function serve({ port, lan, obsidian = true }) {
           return done;
         });
         return json(res, 200, result);
+      }
+      case '/cli/ops': {
+        // Annotations and other edits from the local CLI, shown live in open tabs.
+        const file = await locate(input.id, { trusted: true });
+        const saved = await serialize(() => saveOperations(file, input.id, { operationId: input.operationId, ops: input.ops }));
+        if (!saved.duplicate) {
+          broadcast(input.id, { revision: saved.revision, operationId: input.operationId, ops: input.ops });
+          void schedulePreview(input.id, file);
+        }
+        return json(res, 200, { revision: saved.revision });
       }
       case '/cli/pair':
         return json(res, 200, { links: pairingLinks() });

@@ -60,6 +60,19 @@ Open the same canvas on the iPad and the Mac (or two iPads): strokes, erasing an
 
 When the connection drops, edits wait on the device (also across a reload) and go out automatically, in order and without duplicates, once the server is reachable again; the info icon shows how many are waiting. Open tabs reconnect on their own after `paper stop` / `paper start`.
 
+## Assistants
+
+An assistant with terminal access (Claude Code, Codex, a script) uses the CLI. Coordinates are page units: 900 wide, origin at the page's top left.
+
+```sh
+paper inspect "Sheet 4" --json                          # pages, stroke counts, notes, revision
+paper snapshot "Sheet 4" --page 2 --region 0,300,900,400  # PNG of that area (macOS; --output x.pdf elsewhere)
+paper annotate "Sheet 4" --page 2 --at 520,320 --text "Check the sign here." --revision 12
+paper annotate "Sheet 4" --remove <id> | --clear
+```
+
+Notes live on a separate layer: they never change the handwriting, appear live on every open device, can be hidden with the note button in the toolbar and removed one by one (undo brings them back). A note made with `--revision` older than the canvas is marked as written for an earlier version.
+
 ## Exporting
 
 In the browser, **Export PDF** in the info popover downloads the PDF (on the iPad: save it to Files or share it). On the computer, `paper export <canvas>` (or **Export PDF** in the menu's canvas list) writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and your handwriting is drawn on top as vector lines, so the worksheet's text stays sharp and searchable. Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.

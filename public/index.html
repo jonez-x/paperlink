@@ -156,6 +156,14 @@ main::after {
   main::after { bottom: 8px; left: 20px; right: 20px; }
   nav { top: 72px; }
 }
+/* Assistant notes: a separate layer over the page, readable at every zoom. */
+#notes { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+#notes.is-hidden { display: none; }
+.note { position: absolute; pointer-events: auto; width: max-content; max-width: 280px; padding: 8px 30px 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--ink); box-shadow: 0 4px 14px #0000002a; font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.note.stale { border-left-color: var(--muted); }
+.note small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.note button { position: absolute; top: 3px; right: 3px; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; }
+#notes-toggle span { font-size: 11px; font-weight: 600; }
 #info[data-error=true] { color: #df5429; background: #df542918; }
 #connection-status[data-error=true] { color: #df5429; }
 </style>
@@ -181,9 +189,10 @@ main::after {
 <button id="redo" aria-label="Redo" title="Redo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12" transform="translate(0 -2)"/></svg></button>
 <span class="separator" aria-hidden="true"></span>
 <button id="fit" aria-label="Fit page" title="Fit page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+<button id="notes-toggle" aria-label="Hide assistant notes" title="Hide assistant notes" aria-pressed="true" hidden><span>0</span></button>
 <button id="add-page" aria-label="Add page" title="Add page" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6ZM12 10v8M8 14h8"/></svg></button>
 </nav>
-<main><svg id="sheet" aria-label="Writing surface">
+<main><div id="notes" aria-label="Assistant notes"></div><svg id="sheet" aria-label="Writing surface">
 <defs>
 <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 28 0 L 0 0 0 28"/></pattern>
 <pattern id="mat" width="240" height="240" patternUnits="userSpaceOnUse"><path class="mat-line" d="M 240 0 L 0 0 0 240"/></pattern>
@@ -252,8 +261,11 @@ function pageAt(y) {
 // Edits are operations, the same ones the server merges from every device:
 // add/remove a stroke, add/remove a page. Each is idempotent, so replays and
 // edits from other devices converge; undo inverts only this device's edits.
-function applyOps(target, ops) {
+let annotations = [];
+function applyOps(target, ops, notes = annotations) {
   for (const op of ops) {
+    if (op.type === 'addAnnotation') { if (!notes.some(note => note.id === op.annotation.id)) notes.push(op.annotation); continue; }
+    if (op.type === 'removeAnnotation') { const at = notes.findIndex(note => note.id === op.id); if (at >= 0) notes.splice(at, 1); continue; }
     if (op.type === 'addPage') { if (!target.some(page => page.id === op.page.id)) target.push({ id: op.page.id, width: op.page.width, height: op.page.height, strokes: [] }); continue; }
     const index = target.findIndex(page => page.id === op.page);
     if (index < 0) continue;
@@ -266,6 +278,8 @@ function applyOps(target, ops) {
 }
 const invert = ops => ops.slice().reverse().map(op =>
   op.type === 'add' ? { ...op, type: 'remove' } : op.type === 'remove' ? { ...op, type: 'add' }
+  : op.type === 'addAnnotation' ? { type: 'removeAnnotation', id: op.annotation.id, annotation: op.annotation }
+  : op.type === 'removeAnnotation' ? { type: 'addAnnotation', annotation: op.annotation }
   : op.type === 'addPage' ? { type: 'removePage', page: op.page.id, size: { width: op.page.width, height: op.page.height } }
   : { type: 'addPage', page: { id: op.page, ...op.size } });
 // Differences between two page lists as operations (for edits stored by older versions).
@@ -297,6 +311,7 @@ function render() {
     return group;
   });
   pageLayer.replaceChildren(...groups);
+  renderNotes();
   document.querySelector('#add-page').hidden = !currentDocument;
   document.querySelector('#export-pdf').hidden = !currentDocument;
 }
@@ -329,7 +344,58 @@ function applyView() {
   // Grid lines stay one screen pixel wide at every zoom level.
   for (const line of sheet.querySelectorAll('.grid-line, .mat-line')) line.setAttribute('stroke-width', 1 / view.scale);
   scheduleBackgrounds();
+  positionNotes();
 }
+
+// ── Assistant notes ──
+const notesLayer = document.querySelector('#notes');
+const notesToggle = document.querySelector('#notes-toggle');
+function renderNotes() {
+  notesLayer.replaceChildren(...annotations.map(note => {
+    const card = document.createElement('div');
+    card.className = 'note' + (note.stale ? ' stale' : '');
+    card.dataset.id = note.id;
+    card.textContent = note.text;
+    const meta = document.createElement('small');
+    meta.textContent = (note.author || 'Note') + (note.stale ? ' · written for an earlier version' : '');
+    const remove = Object.assign(document.createElement('button'), { textContent: '×', title: 'Remove note' });
+    remove.setAttribute('aria-label', 'Remove note');
+    remove.onclick = () => {
+      const ops = [{ type: 'removeAnnotation', id: note.id, annotation: note }];
+      applyOps(pages, ops);
+      past.push(ops);
+      future = [];
+      renderNotes();
+      save(ops);
+    };
+    card.append(meta, remove);
+    return card;
+  }));
+  notesToggle.hidden = !annotations.length;
+  notesToggle.querySelector('span').textContent = annotations.length;
+  positionNotes();
+}
+// Notes sit at their page position and keep a fixed screen size.
+function positionNotes() {
+  if (!view || !annotations.length) return;
+  const sheetBox = sheet.getBoundingClientRect(), layerBox = notesLayer.getBoundingClientRect();
+  for (const card of notesLayer.children) {
+    const note = annotations.find(entry => entry.id === card.dataset.id);
+    const index = pages.findIndex(page => page.id === note?.page);
+    if (index < 0) { card.hidden = true; continue; }
+    card.hidden = false;
+    card.style.left = (sheetBox.left - layerBox.left + (note.x - view.x) * view.scale) + 'px';
+    card.style.top = (sheetBox.top - layerBox.top + (pageTop(index) + note.y - view.y) * view.scale) + 'px';
+    if (note.width) card.style.maxWidth = Math.max(160, note.width * view.scale) + 'px';
+  }
+}
+notesToggle.onclick = () => {
+  const shown = notesLayer.classList.toggle('is-hidden') === false;
+  notesToggle.setAttribute('aria-pressed', shown);
+  const label = shown ? 'Hide assistant notes' : 'Show assistant notes';
+  notesToggle.setAttribute('aria-label', label);
+  notesToggle.title = label;
+};
 
 // ── PDF pages: rendered by pdf.js into images under the ink ──
 // Visible pages are rendered sharp for the current zoom, others stay small,
@@ -355,7 +421,7 @@ async function loadPdf(canvas) {
   }).promise;
   if (pdfFor !== canvas.id) return loaded.destroy();
   pdfDocument = loaded;
-  status.textContent = 'Opened · ' + canvas.title;
+  showSaveState();
   scheduleBackgrounds();
   void uploadPreviewImages(canvas);
 }
@@ -775,6 +841,7 @@ async function reloadDocument() {
   if (!currentDocument) return;
   const document = await api('/' + currentDocument.id);
   if (active !== null) { setTimeout(() => void reloadDocument(), 300); return; }
+  annotations = document.annotations ? document.annotations.slice() : [];
   pages = applyOps(document.pages, queue.flatMap(batch => batch.ops));
   incoming = [];
   currentDocument.revision = document.revision;
@@ -786,6 +853,7 @@ function adopt(document, contents) {
   loadPdf(document).catch(error => report('The PDF could not be loaded: ' + error.message, true));
   try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
   pages = contents;
+  annotations = document.annotations ? document.annotations.slice() : [];
   past = []; future = []; incoming = []; saveBlocked = false; live = false;
   try { queue = JSON.parse(localStorage.getItem(queueKey(document.id)) || '[]'); } catch { queue = []; }
   for (const batch of queue) ownBatches.add(batch.operationId);

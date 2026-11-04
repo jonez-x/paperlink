@@ -125,6 +125,14 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - Browser export: GET /api/canvases/:id/export.pdf (paired devices) renders with src/export.js into a temp file and returns it as a download; "Export PDF" button in the info popover. "Retry pending save" only shows while edits are waiting.
 - Verified: npm test (21 tests, new: concurrent batches from two devices, replay and reused IDs, page operations, catch-up vs reload after restart, export download and auth). In Chrome with two tabs on one canvas: strokes appear in the other tab, undo removes only the tab's own stroke, an edit made while the server was down is kept (also across a page reload), sent after restart and received by the other tab; export download returns a PDF. Not tested on the iPad. Two tabs of the same browser on the same canvas share one queue key.
 
+## Assistant layer and CLI (2026-11-04, Claude Code)
+
+- Format: optional `annotations: [{id, page, x, y, width?, text, author?, revision?, stale?, createdAt?}]` (page units; validated in store.js `validAnnotation`). Operations `addAnnotation` / `removeAnnotation` (remove carries the note for undo) go through the same merge, receipts and live stream as strokes.
+- Browser: notes are an HTML overlay positioned from the view (fixed screen size, readable at any zoom), stale notes greyed, × removes (undoable), toolbar button shows the count and hides/shows the layer.
+- CLI for assistants: `paper inspect` (pages, stroke counts, notes with page numbers, revision), `paper snapshot [--page N] [--region X,Y,W,H] [--output FILE]` (single-page export cropped to the region; PNG via Quick Look `qlmanage` on macOS, else PDF; default in ~/.config/paperlink/snapshots), `paper annotate --text … [--page N] [--at X,Y] [--width W] [--author A] [--revision R]`, `--remove <id|prefix>`, `--clear`. Edits go through `/cli/ops` when the server runs (live in tabs), otherwise straight to the file. exportPdf gained `{pages, region}`.
+- Fix: an event stream without `since` now starts live instead of asking for a reload.
+- Verified: npm test (22 tests, new: notes offline and live, stale marking, region snapshot size, PNG snapshot, remove by prefix and clear). In Chrome: note on a PDF page, a note added from the CLI appears live, × removes, undo restores, layer toggle.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.

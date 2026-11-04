@@ -40,8 +40,14 @@ function strokePoints(stroke) {
   return points.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
 }
 
-export async function exportPdf(file, id, output = defaultExportPath(file)) {
+// `pages` (1-based numbers) limits the export; `region` ({x, y, width, height}
+// in page units) crops a single page, e.g. for an assistant looking at an answer.
+export async function exportPdf(file, id, output = defaultExportPath(file), { pages: numbers, region } = {}) {
   const document = await readCanvas(file, id);
+  const selected = numbers ? numbers.map(number => {
+    if (!Number.isInteger(number) || number < 1 || number > document.pages.length) throw new Error('Page ' + number + ' does not exist; the canvas has ' + document.pages.length + '.');
+    return document.pages[number - 1];
+  }) : document.pages;
   const { PDFDocument, rgb, LineCapStyle } = await import(new URL('../vendor/pdf-lib/pdf-lib.esm.min.js', import.meta.url).href);
   const result = await PDFDocument.create();
   let source = null;
@@ -51,7 +57,7 @@ export async function exportPdf(file, id, output = defaultExportPath(file)) {
     try { source = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false }); }
     catch (error) { throw new Error('Cannot read ' + document.pdf.file + ': ' + error.message); }
   }
-  for (const page of document.pages) {
+  for (const page of selected) {
     let target;
     if (page.pdfPage !== undefined && source) {
       if (page.pdfPage > source.getPageCount()) throw new Error('The PDF has fewer pages than the canvas expects.');
@@ -71,6 +77,13 @@ export async function exportPdf(file, id, output = defaultExportPath(file)) {
       const d = points.map(([x, y], index) => (index ? 'L ' : 'M ') + x.toFixed(2) + ' ' + (-y).toFixed(2)).join(' ');
       target.drawSvgPath(d, { x: 0, y: 0, borderColor: rgb(...INK), borderWidth: STROKE_WIDTH * scale, borderLineCap: LineCapStyle.Round });
     }
+    if (region) {
+      const corners = [map(region.x, region.y), map(region.x + region.width, region.y + region.height)];
+      const [left, right] = [Math.min(corners[0][0], corners[1][0]), Math.max(corners[0][0], corners[1][0])];
+      const [bottom, top] = [Math.min(corners[0][1], corners[1][1]), Math.max(corners[0][1], corners[1][1])];
+      target.setCropBox(left, bottom, right - left, top - bottom);
+      target.setMediaBox(left, bottom, right - left, top - bottom);
+    }
   }
   result.setTitle(document.title);
   result.setCreator('Paperlink');
@@ -84,5 +97,5 @@ export async function exportPdf(file, id, output = defaultExportPath(file)) {
     finally { await handle.close(); }
     await rename(temporary, output);
   } finally { await unlink(temporary).catch(() => {}); }
-  return { path: output, pages: document.pages.length, bytes: bytes.length };
+  return { path: output, pages: selected.length, bytes: bytes.length };
 }

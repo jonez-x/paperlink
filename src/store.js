@@ -42,6 +42,7 @@ export async function readCanvas(file, id) {
   try { validatePages(document.pages); }
   catch { throw new Error('Unsupported document format: invalid pages.'); }
   if (document.pdf !== undefined && !validPdfName(document.pdf?.file)) throw new Error('Unsupported document format: invalid PDF reference.');
+  if (document.annotations !== undefined && (!Array.isArray(document.annotations) || !document.annotations.every(validAnnotation))) throw new Error('Unsupported document format: invalid annotations.');
   return document;
 }
 
@@ -110,25 +111,49 @@ export async function saveCanvas(file, id, request) {
   return commit(file, document, request.operationId, hash);
 }
 
+// Annotations: notes from an assistant (or the CLI) on a separate layer, in
+// page coordinates. They never touch the handwriting. `revision` is the canvas
+// revision the author looked at; `stale` marks notes made on an older state.
+export function validAnnotation(note) {
+  return note && typeof note === 'object' && PAGE_ID.test(note.id ?? '') && PAGE_ID.test(note.page ?? '') &&
+    Number.isFinite(note.x) && Number.isFinite(note.y) && Math.abs(note.x) < 20000 && Math.abs(note.y) < 20000 &&
+    (note.width === undefined || (Number.isFinite(note.width) && note.width >= 40 && note.width <= 2000)) &&
+    typeof note.text === 'string' && note.text.length > 0 && note.text.length <= 4000 &&
+    (note.author === undefined || (typeof note.author === 'string' && note.author.length <= 60)) &&
+    (note.revision === undefined || Number.isInteger(note.revision)) && (note.stale === undefined || typeof note.stale === 'boolean');
+}
+
 // Edits as operations, so several devices can write at once without conflicts:
 //   { type: 'add', page, stroke }       adds a stroke unless it is there
 //   { type: 'remove', page, stroke }    removes it if it is there
 //   { type: 'addPage', page: { id, width, height } }
 //   { type: 'removePage', page }        blank pages only; PDF pages stay
+//   { type: 'addAnnotation', annotation } / { type: 'removeAnnotation', id }
 // Each one is idempotent, so replays and concurrent edits converge.
 export function validateOperations(ops) {
   if (!Array.isArray(ops) || !ops.length || ops.length > 5000) throw Object.assign(new Error('Invalid operations.'), { status: 400 });
   for (const op of ops) {
     const valid = ['add', 'remove'].includes(op?.type) ? PAGE_ID.test(op.page ?? '') && typeof op.stroke === 'string'
       : op?.type === 'addPage' ? PAGE_ID.test(op.page?.id ?? '') && dimension(op.page.width) && dimension(op.page.height)
-      : op?.type === 'removePage' ? PAGE_ID.test(op.page ?? '') : false;
+      : op?.type === 'removePage' ? PAGE_ID.test(op.page ?? '')
+      : op?.type === 'addAnnotation' ? validAnnotation(op.annotation)
+      : op?.type === 'removeAnnotation' ? PAGE_ID.test(op.id ?? '') : false;
     if (!valid) throw Object.assign(new Error('Invalid operations.'), { status: 400 });
     if (op.type === 'add') validateStrokes([op.stroke]);
   }
 }
 
-export function applyOperations(pages, ops) {
+export function applyOperations(pages, ops, annotations = []) {
   for (const op of ops) {
+    if (op.type === 'addAnnotation') {
+      if (!annotations.some(note => note.id === op.annotation.id) && annotations.length < 1000) annotations.push(op.annotation);
+      continue;
+    }
+    if (op.type === 'removeAnnotation') {
+      const at = annotations.findIndex(note => note.id === op.id);
+      if (at >= 0) annotations.splice(at, 1);
+      continue;
+    }
     if (op.type === 'addPage') {
       if (!pages.some(page => page.id === op.page.id) && pages.length < 500) pages.push({ id: op.page.id, width: op.page.width, height: op.page.height, strokes: [] });
       continue;
@@ -149,6 +174,8 @@ export async function saveOperations(file, id, request) {
   const document = await readCanvas(file, id);
   const { hash, receipt } = receiptFor(document, request);
   if (receipt) return { revision: receipt.revision, duplicate: true };
-  applyOperations(document.pages, request.ops);
+  document.annotations ??= [];
+  applyOperations(document.pages, request.ops, document.annotations);
+  if (!document.annotations.length) delete document.annotations;
   return commit(file, document, request.operationId, hash);
 }
