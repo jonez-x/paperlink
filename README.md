@@ -2,7 +2,7 @@
 
 A self-hosted notebook for handwriting, assignments and PDF worksheets. Start it from your laptop's CLI, write with Apple Pencil in your iPad browser, and keep every canvas as a `.paperlink` file wherever you like, for example next to your notes in an Obsidian vault. An optional assistant can read a page and leave annotations.
 
-**Status:** Early prototype. Pen, stroke eraser, undo/redo, zoom and panning, multiple pages, PDF worksheets, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, device pairing with stable links and an interactive CLI are implemented. PDF export, live multi-device synchronization and AI integration are planned.
+**Status:** Early prototype. Pen, stroke eraser, undo/redo, zoom and panning, multiple pages, PDF worksheets and PDF export, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, device pairing with stable links and an interactive CLI are implemented. Live multi-device synchronization and AI integration are planned.
 
 ## Install
 
@@ -22,6 +22,7 @@ paper           # interactive menu
 ```sh
 paper new "Uni/Analysis/Sheet 3"          # creates Uni/Analysis/Sheet 3.paperlink, prints its QR code
 paper new "Uni/Analysis/Sheet 4" --pdf ~/Downloads/Blatt4.pdf   # write on the pages of a PDF
+paper export "Sheet 4"                    # Sheet 4 (annotated).pdf next to the canvas (--output FILE)
 paper start                               # background server + QR code
 paper open "Uni/Analysis/Sheet 3"         # file path, ID, ID prefix or title
 paper list                                # canvases created or opened on this computer
@@ -52,6 +53,10 @@ Paperlink keeps a list of the canvases created or opened on this computer (`~/.c
 `paper new "<folder>/<name>" --pdf <file>` (or the PDF prompt in the menu) turns every page of a PDF into a page to write on. The PDF stays unchanged: a PDF already in the canvas folder is used in place, one from elsewhere is copied next to the canvas. It moves with the canvas; deleting the canvas trashes a copied PDF but never one that was already there. Pages added later are blank.
 
 PDF pages keep their original look (white paper, dark ink) in both themes and are re-rendered sharply when you zoom. Rendering uses [pdf.js](https://github.com/mozilla/pdf.js) 5.4.624 (Apache-2.0), bundled in `public/vendor/pdfjs`, so Paperlink still works offline and needs no `npm install`. Obsidian previews show the PDF pages once the browser has opened the canvas, because the server cannot render PDFs itself.
+
+## Exporting
+
+`paper export <canvas>` (or **Export PDF** in the menu's canvas list) writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and your handwriting is drawn on top as vector lines, so the worksheet's text stays sharp and searchable. Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.
 
 ## Moving canvases
 

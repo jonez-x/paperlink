@@ -110,6 +110,12 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - PDFs: pdf.js 5.4.624 legacy build vendored in public/vendor/pdfjs (with standard fonts, cMaps, wasm, ICC; ~5 MB) and served at /vendor/pdfjs/. src/pdf.js reads page sizes in Node (DOMMatrix stub, no rendering). `paper new … --pdf FILE` (or menu prompt) makes one 900-wide page per PDF page; the PDF is used in place if already in the canvas folder, else copied (`copied: true`). GET /api/canvases/:id/pdf for paired devices. The browser renders visible pages at zoom-appropriate width (700–2400 px, power-of-two steps), others at 700 px, and uploads 600 px JPEGs (PUT …/backgrounds/:pageId, JPEG only, PDF pages only) to `~/.config/paperlink/backgrounds/<id>/` for the Obsidian preview, which embeds them as data URLs (≈200 KB per page). Move takes the PDF along (free name on clash, reference updated); delete trashes copied PDFs and the image cache.
 - Verified: npm test (18 tests, new: multi-page merge rules, v1 upgrade, PDF creation incl. broken PDF, in-place vs copied, PDF serving and auth, vendor route and traversal, preview image upload rules, PDF page protection, move/delete with PDF). In Chrome against a sandbox server: zoom, fit, add page, undo of the page, saving v2; a generated two-page PDF renders, ink is dark on it, zoom re-renders sharply, the Obsidian preview SVG shows PDF and ink. Not yet tested: touch gestures on the iPad, large/scanned PDFs, memory on the iPad.
 
+## PDF export (2026-11-04, Claude Code)
+
+- src/export.js with pdf-lib 1.17.1 (ESM bundle vendored in vendor/pdf-lib, MIT; Node only, not served). PDF pages are copied unchanged; strokes are mapped from page units into each page's crop box with its rotation (0/90/180/270, matching pdf.js's display) and drawn as vector paths (round caps, ink #24231f, width scaled from 3 units). Non-PDF pages become white pages 595.28 pt wide (A4 for blank pages). Atomic write.
+- `paper export <canvas> [--output FILE|FOLDER]`, default `<Name> (annotated).pdf` next to the canvas, overwritten on re-export; menu: All canvases › Export PDF.
+- Verified: npm test (20 tests, new: rotation/crop mapping, export read back with pdf.js: page count, displayed sizes incl. rotated page, ink operators on every page, title, original text still extractable). Visual check of an export with a rotated page.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
@@ -117,7 +123,7 @@ User tries the file-based CLI and the notes in Obsidian. Test the storage flow o
 ## Current limitations
 
 - Browser-only drafts are per device/origin. Vault saves work. Live device sync, PDFs, MCP and assistant triggers remain pending.
-- No pressure-aware ink, lasso or highlighter. PDF export pending.
+- No pressure-aware ink, lasso or highlighter. Export only from the CLI, not from the browser.
 - Undo history is session-only. localStorage data is only minimally validated.
 - Eraser hit testing and redraw iterate all paths. Optimize when document sizes require it.
 - LAN API access uses paired device tokens over HTTP and assumes a trusted LAN. HTTPS and production hardening remain pending.

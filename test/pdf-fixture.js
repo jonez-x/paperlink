@@ -1,13 +1,13 @@
-// A minimal valid PDF with one page per [width, height] in points and a line
+// A minimal valid PDF with one page per [width, height, rotate?] in points and a line
 // of text on each, so tests need no binary fixture files.
 export function makePdf(sizes) {
   const objects = ['<< /Type /Catalog /Pages 2 0 R >>', null, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
   const kids = [];
-  sizes.forEach(([width, height], index) => {
+  sizes.forEach(([width, height, rotate = 0], index) => {
     const text = 'BT /F1 24 Tf 72 ' + (height - 96) + ' Td (Exercise ' + (index + 1) + ') Tj ET';
     objects.push('<< /Length ' + text.length + ' >>\nstream\n' + text + '\nendstream');
     const content = objects.length;
-    objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + width + ' ' + height + '] /Contents ' + content + ' 0 R /Resources << /Font << /F1 3 0 R >> >> >>');
+    objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + width + ' ' + height + '] /Rotate ' + rotate + ' /Contents ' + content + ' 0 R /Resources << /Font << /F1 3 0 R >> >> >>');
     kids.push(objects.length + ' 0 R');
   });
   objects[1] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + kids.length + ' >>';

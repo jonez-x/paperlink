@@ -14,6 +14,7 @@ import { configPath, expandHome, loadConfig, saveConfig, stateDirectory, validPo
 import { forget, loadRegistry, relocate, remember } from './registry.js';
 import { deleteCanvas, findMoved, moveCanvas } from './move.js';
 import { canvasLink, loadDevices, saveDevices } from './devices.js';
+import { defaultExportPath, exportPdf } from './export.js';
 import { readCanvas } from './store.js';
 import { writeObsidianFiles } from './preview.js';
 import { renderQr } from './qr.js';
@@ -27,7 +28,7 @@ class CliError extends Error {}
 
 // ── Arguments ────────────────────────────────────────────────────────────────
 const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start', 'all', 'yes']);
-const VALUE_FLAGS = new Set(['port', 'title', 'from-browser', 'pdf']);
+const VALUE_FLAGS = new Set(['port', 'title', 'from-browser', 'pdf', 'output']);
 
 export function parseArguments(argv) {
   const flags = {};
@@ -446,6 +447,18 @@ async function cmdMove(ctx, positional) {
     ok('Moved ' + canvas.title + c.muted(' → ' + plain(prettyPath(result.path)))) + (note ? '\n' + ok('Note ' + c.muted('· ' + plain(prettyPath(note)))) : ''));
 }
 
+// The canvas as a PDF: PDF pages unchanged with the ink on top, blank pages as A4.
+async function cmdExport(ctx, positional) {
+  const canvas = await findCanvas(ctx, positional.join(' '));
+  if (!canvas) return;
+  let output = ctx.flags.output ? path.resolve(expandHome(ctx.flags.output)) : defaultExportPath(canvas.path);
+  if (existsSync(output) && statSync(output).isDirectory()) output = path.join(output, path.basename(defaultExportPath(canvas.path)));
+  if (!/\.pdf$/i.test(output)) output += '.pdf';
+  const result = await exportPdf(canvas.path, canvas.id, output);
+  emit(ctx, { id: canvas.id, title: canvas.title, ...result }, () =>
+    ok('Exported ' + canvas.title + c.muted(' · ' + result.pages + ' page' + (result.pages === 1 ? '' : 's') + ' · ' + Math.max(1, Math.round(result.bytes / 1024)) + ' KB')) + '\n  ' + prettyPath(result.path));
+}
+
 // Canvases named on the command line, or all of them with --all.
 async function targets(ctx, positional) {
   if (ctx.flags.all) return knownCanvases();
@@ -514,6 +527,7 @@ async function browse(ctx) {
       choices: [
         { label: 'Open', value: 'open', disabled: canvas.missing, hint: 'QR code for the iPad' },
         { label: 'Move or rename', value: 'move', disabled: canvas.missing },
+        { label: 'Export PDF', value: 'export', disabled: canvas.missing, hint: 'next to the canvas' },
         { label: 'Delete', value: 'delete', hint: 'canvas, note and preview to the Trash' },
         { label: 'Remove from list', value: 'forget', hint: 'keeps the file' },
         { label: 'Back', value: 'back' }
@@ -522,6 +536,7 @@ async function browse(ctx) {
     if (!action || action === 'back') { ui.clearScreen(); continue; }
     if (action === 'open') await cmdOpen(ctx, [canvas.id]);
     if (action === 'move') await cmdMove(ctx, [canvas.id]);
+    if (action === 'export') await cmdExport(ctx, [canvas.id]);
     if (action === 'delete') await cmdDelete(ctx, [canvas.id]);
     if (action === 'forget') await cmdForget(ctx, [canvas.id]);
     console.log();
@@ -740,6 +755,7 @@ function helpText() {
     command('move <canvas> <folder/ | new path>', 'move or rename with note and preview'),
     command('delete <canvas> | --all [--yes]', 'move canvas, note and preview to the Trash'),
     command('forget <canvas> | --all', 'remove from the list, keep the file'),
+    command('export <canvas> [--output FILE]', 'PDF with your handwriting, for handing in'),
     command('preview [file|id|title]', 'write Obsidian notes and previews'),
     command('drafts', 'unsaved drafts from connected tabs'),
     command('import "<folder>/<name>" --from-browser <id>', 'save a draft as a canvas'),
@@ -803,6 +819,7 @@ export async function main(argv) {
       case 'devices': return await cmdDevices(ctx);
       case 'unpair': return await cmdUnpair(ctx, rest);
       case 'preview': return await cmdPreview(ctx, rest);
+      case 'export': return await cmdExport(ctx, rest);
       case 'drafts': return await cmdDrafts(ctx);
       case 'import': return await cmdImport(ctx, rest);
       case 'init': throw new CliError('Libraries are gone: a canvas is a ' + EXTENSION + ' file wherever you create it. Try `paper new "<folder>/<name>"`.');
