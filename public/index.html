@@ -138,14 +138,13 @@ main::after {
   display: block;
   width: 100%;
   height: 100%;
-  background-color: var(--paper);
-  background-image: linear-gradient(var(--grid) 1px, transparent 1px),
-                    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 28px 28px;
   border: 1px solid var(--line);
   touch-action: none;
 }
-#sheet path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+#sheet .page { fill: var(--paper); stroke: var(--line); }
+#sheet .grid-line { fill: none; stroke: var(--grid); }
+#sheet .mat-line { fill: none; stroke: var(--line); }
+#sheet .ink path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 600px) {
   header { padding: 0 16px; gap: 12px; }
 
@@ -176,10 +175,22 @@ main::after {
 <span class="separator" aria-hidden="true"></span>
 <button id="undo" aria-label="Undo" title="Undo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12" transform="translate(0 -2)"/></svg></button>
 <button id="redo" aria-label="Redo" title="Redo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12" transform="translate(0 -2)"/></svg></button>
+<span class="separator" aria-hidden="true"></span>
+<button id="fit" aria-label="Fit page" title="Fit page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+<button id="add-page" aria-label="Add page" title="Add page" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6ZM12 10v8M8 14h8"/></svg></button>
 </nav>
-<main><svg id="sheet" viewBox="0 0 900 1100" preserveAspectRatio="xMidYMin meet" aria-label="Writing surface"></svg></main>
+<main><svg id="sheet" aria-label="Writing surface">
+<defs>
+<pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 28 0 L 0 0 0 28"/></pattern>
+<pattern id="mat" width="240" height="240" patternUnits="userSpaceOnUse"><path class="mat-line" d="M 240 0 L 0 0 0 240"/></pattern>
+</defs>
+<rect id="mat-area" fill="url(#mat)"/>
+<g id="pages"></g>
+</svg></main>
 <script>
+const SVG = 'http://www.w3.org/2000/svg';
 const sheet = document.querySelector('#sheet');
+const pageLayer = document.querySelector('#pages');
 const toolbar = document.querySelector('nav');
 let toolbarTimer;
 function hideToolbar() {
@@ -197,23 +208,113 @@ function revealToolbarSoon() {
 const status = document.querySelector('#status');
 const theme = document.querySelector('#theme');
 const media = matchMedia('(prefers-color-scheme: dark)');
-let strokes = [], past = [], future = [], active = null, tool = 'pen';
-let beforeGesture = null, previousPoint = null, gestureTool = null;
-try { strokes = JSON.parse(localStorage.getItem('paperlink-draft') || '[]'); } catch {}
-if (!Array.isArray(strokes)) strokes = [];
+function element(name, attributes = {}) {
+  const node = document.createElementNS(SVG, name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  return node;
+}
+// randomUUID needs a secure context, which plain-HTTP LAN pages are not.
+function newId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+}
+
+// ── Document: pages stacked vertically; strokes use page coordinates ──
+const PAGE_GAP = 40;
+const blankPage = () => ({ id: newId(), width: 900, height: 1273, strokes: [] }); // A4
+let pages = [blankPage()], past = [], future = [], active = null, tool = 'pen';
+let beforeGesture = null, previousPoint = null, gestureTool = null, drawing = null;
+try {
+  const draft = JSON.parse(localStorage.getItem('paperlink-draft') || '[]');
+  if (Array.isArray(draft)) pages[0].strokes = draft;
+} catch {}
+function pageTop(index) {
+  let y = 0;
+  for (let i = 0; i < index; i++) y += pages[i].height + PAGE_GAP;
+  return y;
+}
+const documentWidth = () => Math.max(...pages.map(page => page.width));
+const documentHeight = () => pageTop(pages.length) - PAGE_GAP;
+// The page under a point, or the nearest one: writing may run over page edges.
+function pageAt(y) {
+  for (let i = 0, top = 0; i < pages.length; i++) {
+    if (y < top + pages[i].height + PAGE_GAP / 2 || i === pages.length - 1) return i;
+    top += pages[i].height + PAGE_GAP;
+  }
+  return 0;
+}
+const snapshot = () => pages.map(page => ({ ...page, strokes: page.strokes.slice() }));
 function save() {
   if (currentDocument) { saveToVault(); return; }
-  try { localStorage.setItem('paperlink-draft', JSON.stringify(strokes)); status.textContent = 'Saved in this browser'; }
+  try { localStorage.setItem('paperlink-draft', JSON.stringify(pages[0].strokes)); status.textContent = 'Saved in this browser'; }
   catch { status.textContent = 'Save failed – keep this browser open'; }
 }
 function render() {
-  sheet.replaceChildren();
-  for (const stroke of strokes) {
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', stroke);
-    sheet.append(path);
-  }
+  const groups = pages.map((page, index) => {
+    const group = element('g', { transform: 'translate(0 ' + pageTop(index) + ')' });
+    group.append(element('rect', { class: 'page', width: page.width, height: page.height, 'vector-effect': 'non-scaling-stroke' }));
+    group.append(element('rect', { width: page.width, height: page.height, fill: 'url(#grid)' }));
+    const ink = element('g', { class: 'ink' });
+    for (const stroke of page.strokes) ink.append(element('path', { d: stroke }));
+    group.append(ink);
+    return group;
+  });
+  pageLayer.replaceChildren(...groups);
+  document.querySelector('#add-page').hidden = !currentDocument;
 }
+const inkOf = index => pageLayer.children[index]?.querySelector('.ink');
+
+// ── View: pan and zoom in world units, independent of the stored strokes ──
+let view = null; // { x, y, scale }: scale = screen pixels per world unit
+function size() { return { width: sheet.clientWidth || 1, height: sheet.clientHeight || 1 }; }
+function fitScale() {
+  const { width, height } = size();
+  return Math.min((width - 48) / documentWidth(), (height - 48) / pages[0].height);
+}
+function fit() {
+  const { width } = size();
+  const scale = fitScale();
+  view = { scale, x: (documentWidth() - width / scale) / 2, y: -24 / scale };
+  applyView();
+}
+function applyView() {
+  const { width, height } = size();
+  const minimum = fitScale() * 0.5, maximum = fitScale() * 8;
+  view.scale = Math.min(maximum, Math.max(minimum, view.scale));
+  // Keep part of the document in view.
+  const w = width / view.scale, h = height / view.scale;
+  view.x = Math.min(documentWidth() - w * 0.2, Math.max(-w * 0.8, view.x));
+  view.y = Math.min(documentHeight() - h * 0.2, Math.max(-h * 0.8, view.y));
+  sheet.setAttribute('viewBox', [view.x, view.y, w, h].join(' '));
+  const mat = document.querySelector('#mat-area');
+  for (const [key, value] of Object.entries({ x: view.x, y: view.y, width: w, height: h })) mat.setAttribute(key, value);
+  // Grid lines stay one screen pixel wide at every zoom level.
+  for (const line of sheet.querySelectorAll('.grid-line, .mat-line')) line.setAttribute('stroke-width', 1 / view.scale);
+}
+// Zoom around a screen point, so the spot under the fingers stays put.
+function zoomAt(clientX, clientY, factor) {
+  const box = sheet.getBoundingClientRect();
+  const sx = clientX - box.left, sy = clientY - box.top;
+  const worldX = view.x + sx / view.scale, worldY = view.y + sy / view.scale;
+  view.scale *= factor;
+  const clamped = Math.min(fitScale() * 8, Math.max(fitScale() * 0.5, view.scale));
+  view.scale = clamped;
+  view.x = worldX - sx / view.scale;
+  view.y = worldY - sy / view.scale;
+  applyView();
+}
+function panBy(dx, dy) {
+  view.x -= dx / view.scale;
+  view.y -= dy / view.scale;
+  applyView();
+}
+new ResizeObserver(() => {
+  if (!view) return fit();
+  applyView();
+}).observe(sheet);
+
 // Cancel Safari's native scrolling on the drawing surface before it claims a gesture.
 for (const type of ['touchstart', 'touchmove']) {
   sheet.parentElement.addEventListener(type, event => {
@@ -225,45 +326,75 @@ function point(event) {
 }
 // Test a forgiving, screen-sized swept area instead of requiring an exact path tap.
 function eraseBetween(from, to) {
-  const scale = Math.hypot(sheet.getScreenCTM().a, sheet.getScreenCTM().b);
-  const radius = 12 / scale;
+  const radius = 12 / view.scale;
   const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / radius));
-  const paths = Array.from(sheet.children);
-  const removed = new Set();
-  paths.forEach((path, index) => {
-    path.style.strokeWidth = String(radius * 2);
-    for (let step = 0; step <= steps; step++) {
-      const fraction = step / steps;
-      const sample = new DOMPoint(from.x + (to.x - from.x) * fraction, from.y + (to.y - from.y) * fraction);
-      if (path.isPointInStroke(sample)) {
-        removed.add(index);
-        break;
+  let changed = false;
+  pages.forEach((page, index) => {
+    const top = pageTop(index);
+    if (Math.max(from.y, to.y) < top - radius - 200 || Math.min(from.y, to.y) > top + page.height + radius + 200) return;
+    const removed = new Set();
+    Array.from(inkOf(index).children).forEach((path, strokeIndex) => {
+      path.style.strokeWidth = String(radius * 2);
+      for (let step = 0; step <= steps; step++) {
+        const fraction = step / steps;
+        const sample = new DOMPoint(from.x + (to.x - from.x) * fraction, from.y + (to.y - from.y) * fraction - top);
+        if (path.isPointInStroke(sample)) { removed.add(strokeIndex); break; }
       }
-    }
-    path.style.removeProperty('stroke-width');
+      path.style.removeProperty('stroke-width');
+    });
+    if (removed.size) { page.strokes = page.strokes.filter((stroke, strokeIndex) => !removed.has(strokeIndex)); changed = true; }
   });
-  if (removed.size) {
-    strokes = strokes.filter((stroke, index) => !removed.has(index));
-    render();
-  }
+  if (changed) render();
+}
+
+// ── Input: Pencil and mouse write; fingers pan (one) and zoom (two) ──
+const touches = new Map();
+let touchGesture = null;
+function touchCenter() {
+  const points = [...touches.values()];
+  const x = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+  const y = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+  const distance = points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0;
+  return { x, y, distance };
 }
 sheet.addEventListener('pointerdown', event => {
   if (event.cancelable) event.preventDefault();
-  if (event.pointerType === 'touch' || active !== null || event.button !== 0) return;
+  if (event.pointerType === 'touch') {
+    // A resting palm while writing must not move the page.
+    if (active !== null || touches.size >= 2) return;
+    sheet.setPointerCapture(event.pointerId);
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    touchGesture = touchCenter();
+    return;
+  }
+  if (active !== null || event.button !== 0 || touches.size) return;
   sheet.setPointerCapture(event.pointerId);
   active = event.pointerId;
   hideToolbar();
   gestureTool = tool;
-  beforeGesture = strokes.slice();
+  beforeGesture = snapshot();
   previousPoint = point(event);
   if (gestureTool === 'eraser') {
     eraseBetween(previousPoint, previousPoint);
   } else {
-    strokes.push('M ' + previousPoint.x + ' ' + previousPoint.y + ' l 0.01 0');
-    render();
+    const index = pageAt(previousPoint.y), top = pageTop(index);
+    const stroke = 'M ' + previousPoint.x + ' ' + (previousPoint.y - top) + ' l 0.01 0';
+    pages[index].strokes.push(stroke);
+    const path = element('path', { d: stroke });
+    inkOf(index).append(path);
+    drawing = { index, top, path };
   }
 });
 sheet.addEventListener('pointermove', event => {
+  if (touches.has(event.pointerId)) {
+    if (event.cancelable) event.preventDefault();
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const next = touchCenter();
+    if (touchGesture.distance && next.distance) zoomAt(next.x, next.y, next.distance / touchGesture.distance);
+    panBy(next.x - touchGesture.x, next.y - touchGesture.y);
+    touchGesture = next;
+    return;
+  }
   if (event.pointerId !== active) return;
   if (event.cancelable) event.preventDefault();
   const samples = event.getCoalescedEvents?.();
@@ -272,17 +403,20 @@ sheet.addEventListener('pointermove', event => {
     if (gestureTool === 'eraser') {
       eraseBetween(previousPoint, p);
     } else {
-      strokes[strokes.length - 1] += ' L ' + p.x + ' ' + p.y;
-      sheet.lastChild.setAttribute('d', strokes[strokes.length - 1]);
+      const strokes = pages[drawing.index].strokes;
+      strokes[strokes.length - 1] += ' L ' + p.x + ' ' + (p.y - drawing.top);
+      drawing.path.setAttribute('d', strokes[strokes.length - 1]);
     }
     previousPoint = p;
   }
 });
 function finish(event) {
+  if (touches.delete(event.pointerId)) { touchGesture = touches.size ? touchCenter() : null; return; }
   if (event.pointerId !== active) return;
   active = null;
+  drawing = null;
   revealToolbarSoon();
-  if (JSON.stringify(strokes) !== JSON.stringify(beforeGesture)) {
+  if (JSON.stringify(pages) !== JSON.stringify(beforeGesture)) {
     past.push(beforeGesture);
     future = [];
     save();
@@ -292,19 +426,38 @@ function finish(event) {
 sheet.addEventListener('pointerup', finish);
 sheet.addEventListener('pointercancel', finish);
 sheet.addEventListener('lostpointercapture', finish);
+// Trackpads and mice: scroll pans, pinch (ctrl + wheel) zooms.
+sheet.addEventListener('wheel', event => {
+  event.preventDefault();
+  if (event.ctrlKey || event.metaKey) zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * 0.01));
+  else panBy(-event.deltaX, -event.deltaY);
+}, { passive: false });
 for (const name of ['pen','eraser']) document.getElementById(name).onclick = () => {
   tool = name;
   for (const id of ['pen','eraser']) document.getElementById(id).setAttribute('aria-pressed', id === name);
 };
 function restoreHistory(source, destination) {
   if (active !== null || !source.length) return;
-  destination.push(strokes.slice());
-  strokes = source.pop();
+  destination.push(snapshot());
+  pages = source.pop();
   render();
+  applyView();
   save();
 }
 document.querySelector('#undo').onclick = () => restoreHistory(past, future);
 document.querySelector('#redo').onclick = () => restoreHistory(future, past);
+document.querySelector('#fit').onclick = fit;
+document.querySelector('#add-page').onclick = () => {
+  if (active !== null) return;
+  past.push(snapshot());
+  future = [];
+  pages.push(blankPage());
+  render();
+  // Show the new page.
+  view.y = pageTop(pages.length - 1) - 24 / view.scale;
+  applyView();
+  save();
+};
 const themeModes = ['system', 'light', 'dark'];
 const themeIcons = {
   system: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
@@ -331,10 +484,10 @@ theme.onclick = () => {
 };
 media.addEventListener('change', applyTheme);
 
-applyTheme(); render();
+let currentDocument = null;
+applyTheme(); render(); fit();
 
 const connectionStatus = document.querySelector('#connection-status');
-let currentDocument = null;
 let pendingSave = null;
 let saving = false;
 let saveBlocked = false;
@@ -385,7 +538,7 @@ async function api(route, options = {}) {
 function recoveryKey() { return 'paperlink-pending-' + currentDocument.id; }
 function persistRecovery() {
   localStorage.setItem(recoveryKey(), JSON.stringify({
-    document: currentDocument, strokes, request: pendingSave
+    document: currentDocument, pages, request: pendingSave
   }));
 }
 function saveToVault() {
@@ -403,13 +556,13 @@ async function flushSave() {
   saving = true;
   try {
     do {
-      pendingSave ||= { operationId: operationId(), revision: currentDocument.revision, strokes: strokes.slice() };
+      pendingSave ||= { operationId: operationId(), revision: currentDocument.revision, pages: snapshot() };
       persistRecovery();
       const result = await api('/' + currentDocument.id, { method: 'PUT', body: JSON.stringify(pendingSave) });
-      const sent = pendingSave.strokes;
+      const sent = pendingSave.pages;
       currentDocument.revision = result.revision;
       pendingSave = null;
-      if (JSON.stringify(strokes) === JSON.stringify(sent)) {
+      if (JSON.stringify(pages) === JSON.stringify(sent)) {
         localStorage.removeItem(recoveryKey());
         status.textContent = 'Saved to vault · ' + currentDocument.title;
         report('Saved to vault.');
@@ -427,9 +580,10 @@ async function flushSave() {
 function adopt(document, contents) {
   currentDocument = { id: document.id, title: document.title, revision: document.revision };
   try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
-  strokes = contents;
+  pages = contents;
   past = []; future = []; pendingSave = null; saveBlocked = false;
   render();
+  fit();
   status.textContent = 'Opened · ' + document.title;
 }
 async function openCanvas(id) {
@@ -437,12 +591,13 @@ async function openCanvas(id) {
   const recovery = localStorage.getItem('paperlink-pending-' + document.id);
   if (recovery) {
     const saved = JSON.parse(recovery);
-    adopt(saved.document, saved.strokes);
-    pendingSave = saved.request;
+    // Records from before multi-page documents hold only the first page's strokes.
+    adopt(saved.document, saved.pages || [{ ...document.pages[0], strokes: saved.strokes }]);
+    pendingSave = saved.request?.pages ? saved.request : null;
     report('Recovered local edits. Saving them to the vault.');
     await flushSave();
   } else {
-    adopt(document, document.pages[0].strokes);
+    adopt(document, document.pages);
   }
 }
 function action(id, callback) {
@@ -473,9 +628,9 @@ async function publishDraft() {
   if (!deviceToken || loading || polling || active !== null || (currentDocument && !saveBlocked)) return;
   polling = true;
   try {
-    const result = await api('/drafts/' + browserDraftId, { method: 'PUT', body: JSON.stringify({ strokes: strokes.slice() }) });
+    const result = await api('/drafts/' + browserDraftId, { method: 'PUT', body: JSON.stringify({ strokes: pages[0].strokes.slice() }) });
     if (result.document && active === null && !saving) {
-      const contents = strokes.slice();
+      const contents = [{ ...pages[0], strokes: pages[0].strokes.slice() }];
       adopt(result.document, contents);
       saveToVault();
       browserDraftId = operationId();

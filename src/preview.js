@@ -12,6 +12,7 @@ import { canvasBase, obsidianVault, safeFileName } from './documents.js';
 
 const PAPER = '#fffdf5';
 const INK = '#24231f';
+const BORDER = '#dedbd0';
 const PAGE_WIDTH = 900;
 const PADDING = 40;
 const MIN_HEIGHT = 240;
@@ -42,7 +43,8 @@ function strokeBounds(strokes) {
 
 // Keeps the page width so handwriting has the same scale in every preview;
 // the height follows the content. Writing beyond the page edges widens it.
-export function renderPreview(document) {
+export function renderPreview(document, { backgrounds = {} } = {}) {
+  if (document.pages.length > 1 || document.pages[0].pdfPage !== undefined) return renderPages(document, backgrounds);
   const strokes = document.pages[0].strokes;
   const bounds = strokeBounds(strokes);
   const round = value => Math.round(value * 10) / 10;
@@ -58,6 +60,33 @@ export function renderPreview(document) {
     `<g fill="none" stroke="${INK}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">`,
     ...strokes.map(stroke => `<path d="${stroke}"/>`),
     '</g>',
+    '</svg>',
+    ''
+  ].join('\n');
+}
+
+// Several pages (or PDF pages): every page in full, stacked as in the browser.
+// `backgrounds` maps page IDs to image data URLs of their PDF pages.
+const PAGE_GAP = 40;
+function renderPages(document, backgrounds) {
+  const parts = [];
+  let top = 0, width = 0;
+  for (const page of document.pages) {
+    const background = backgrounds[page.id];
+    parts.push(`<g transform="translate(0 ${top})">`,
+      `<rect width="${page.width}" height="${page.height}" fill="${background ? '#ffffff' : PAPER}" stroke="${BORDER}" stroke-width="2"/>`,
+      ...(background ? [`<image href="${background}" width="${page.width}" height="${page.height}" preserveAspectRatio="none"/>`] : []),
+      `<g fill="none" stroke="${INK}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">`,
+      ...page.strokes.map(stroke => `<path d="${stroke}"/>`),
+      '</g>', '</g>');
+    top += page.height + PAGE_GAP;
+    width = Math.max(width, page.width);
+  }
+  const height = top - PAGE_GAP;
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 ${width + 4} ${height + 4}" width="${width + 4}" height="${height + 4}">`,
+    `<title>${escapeXml(document.title)}</title>`,
+    ...parts,
     '</svg>',
     ''
   ].join('\n');

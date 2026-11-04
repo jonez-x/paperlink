@@ -28,9 +28,9 @@ export async function createCanvas(file, title = canvasBase(file)) {
   if (!isCanvasFile(file)) throw new Error('Canvas files end in ' + EXTENSION + '.');
   await mkdir(path.dirname(file), { recursive: true });
   const document = {
-    format: 'paperlink', version: 1, id: randomUUID(), title: title.trim(),
+    format: 'paperlink', version: 2, id: randomUUID(), title: title.trim(),
     revision: 0, createdAt: new Date().toISOString(),
-    pages: [{ id: randomUUID(), width: 900, height: 1100, strokes: [] }]
+    pages: [{ id: randomUUID(), width: 900, height: 1273, strokes: [] }] // A4
   };
   try {
     await writeFile(file, JSON.stringify(document, null, 2) + '\n', { flag: 'wx' });

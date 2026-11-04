@@ -32,3 +32,40 @@ test('durable save, exact retry, conflicts and validation', async () => {
     await assert.rejects(readCanvas(file, document.id), error => error.code === 'ENOENT');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('multi-page saves: new pages, kept sizes, protected PDF pages and old single-page clients', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'paperlink-'));
+  try {
+    const file = path.join(root, 'Pages.paperlink');
+    const document = await createCanvas(file);
+    assert.equal(document.version, 2);
+    const first = document.pages[0];
+    const stroke = 'M 1 1 l 0.01 0 L 5 5';
+    // A client sends a second page; known pages keep their stored size.
+    await saveCanvas(file, document.id, { revision: 0, operationId: 'add', pages: [{ ...first, width: 50, strokes: [stroke] }, { id: 'second-page', width: 900, height: 1273, strokes: [] }] });
+    let saved = await readCanvas(file, document.id);
+    assert.deepEqual(saved.pages.map(page => [page.id, page.width, page.strokes.length]), [[first.id, 900, 1], ['second-page', 900, 0]]);
+    await assert.rejects(saveCanvas(file, document.id, { revision: 1, operationId: 'dup', pages: [first, first] }), error => error.status === 400);
+    await assert.rejects(saveCanvas(file, document.id, { revision: 1, operationId: 'pdf', pages: [first, { id: 'fake', width: 900, height: 900, strokes: [], pdfPage: 1 }] }), /Unknown PDF page/);
+    // Old clients sending one page's strokes are refused once there are several pages.
+    await assert.rejects(saveCanvas(file, document.id, { revision: 1, operationId: 'old', strokes: [] }), error => error.status === 409);
+
+    // PDF-backed pages cannot be dropped.
+    saved.pages[0].pdfPage = 1;
+    saved.pdf = { file: 'Sheet.pdf' };
+    await writeFile(file, JSON.stringify(saved));
+    await assert.rejects(saveCanvas(file, document.id, { revision: 1, operationId: 'drop', pages: [saved.pages[1]] }), /cannot be removed/);
+    await saveCanvas(file, document.id, { revision: 1, operationId: 'keep', pages: [{ id: first.id, width: 60, height: 60, strokes: [] }, saved.pages[1]] });
+    saved = await readCanvas(file, document.id);
+    assert.equal(saved.pages[0].pdfPage, 1, 'PDF backing survives a save');
+    assert.equal(saved.pages[0].height, 1273);
+
+    // Version 1 files are read and upgraded on the next save.
+    const legacy = path.join(root, 'Legacy.paperlink');
+    await writeFile(legacy, JSON.stringify({ format: 'paperlink', version: 1, id: '8cdf569c-5c4a-4ca6-97c6-ed92c0ca05f5', title: 'Old', revision: 0, pages: [{ id: 'p', width: 900, height: 1100, strokes: [] }] }));
+    await saveCanvas(legacy, '8cdf569c-5c4a-4ca6-97c6-ed92c0ca05f5', { revision: 0, operationId: 'old-client', strokes: [stroke] });
+    const upgraded = await readCanvas(legacy);
+    assert.equal(upgraded.version, 2);
+    assert.equal(upgraded.pages[0].height, 1100);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
