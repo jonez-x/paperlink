@@ -25,11 +25,14 @@ paper start                               # background server + QR code
 paper open "Uni/Analysis/Sheet 3"         # file path, ID, ID prefix or title
 paper list                                # canvases created or opened on this computer
 paper move "Sheet 3" "Uni/Archive/"      # move or rename, note and preview included
-paper forget <id|title>                   # remove from that list, keep the file
+paper delete "Sheet 3"                    # canvas, note and preview to the Trash (--all for every canvas)
+paper forget <id|title>                   # remove from that list, keep the file (--all)
 paper status
 paper stop
 paper help                                # all commands and options
 ```
+
+In the menu, **All canvases** lists everything; pick one to open, move, delete or remove it from the list. Deleting asks for confirmation (scripts pass `--yes`) and uses the Trash, so it can be undone.
 
 `paper serve` runs the server in the current terminal instead of the background. `paper drafts` and `paper import "<folder>/<name>" --from-browser <id>` save drawings made before a canvas was opened.
 
@@ -39,10 +42,10 @@ A canvas is one file, `<Name>.paperlink`, wherever you create it. Relative paths
 
 Paperlink keeps a list of the canvases created or opened on this computer (`~/.config/paperlink/canvases.json`). The server only serves those files to devices, so nobody on the network can request other files. ## Moving canvases
 
-Use `paper move <canvas> <folder/>` to move, or `paper move <canvas> <new path>` to rename. Note and preview move along, and a running server switches over without losing a save. Moves made elsewhere are caught too:
+Use `paper move <canvas> <folder/>` to move, or `paper move <canvas> <new path>` to rename. The note moves along, and a running server switches over without losing a save. Moves made elsewhere are caught too:
 
 - **Finder or sync:** a canvas missing from its place is searched for by ID, anywhere in its Obsidian vault, or otherwise near its old folder. If it cannot be found, `paper list` marks it as missing; `paper open "<new path>"` reconnects it.
-- **Obsidian:** Obsidian does not show `.paperlink` files, so moving a note leaves the canvas behind. On the next save the server notices and moves the canvas and its preview next to the note.
+- **Obsidian:** Obsidian does not show `.paperlink` files, so moving a note leaves the canvas behind. On the next save the server notices and moves the canvas next to the note.
 
 Settings live in `~/.config/paperlink/config.json` (override with `PAPERLINK_CONFIG`):
 
@@ -58,7 +61,7 @@ paper config set port 8080
 Canvases inside an Obsidian vault (any folder below one with `.obsidian`) automatically get two companions:
 
 - `<Name>.md`, a note that embeds the handwriting and shows the `paper open` command. It is created once and then belongs to you: rename or move it and add your own text below the embed; Paperlink never rewrites it.
-- `<id>.preview.svg`, the handwriting on light paper, named by canvas ID so renames never break the embed. The running server refreshes it about 1.5 seconds after the last save.
+- `Paperlink Previews/<id>.svg` at the vault root, the handwriting on light paper. One folder per vault keeps your folders clean; the ID keeps names unique and stable when you rename or move things. The running server refreshes it about 1.5 seconds after the last save.
 
 `paper preview` creates previews and missing notes for known canvases inside vaults (all, or `paper preview <file|id|title>`). Restart the server after changing the setting.
 

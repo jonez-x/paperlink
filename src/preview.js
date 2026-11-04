@@ -1,14 +1,14 @@
-import { access, open, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, open, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { canvasBase, safeFileName } from './documents.js';
+import { canvasBase, obsidianVault, safeFileName } from './documents.js';
 
 // Inside an Obsidian vault, "<Name>.paperlink" gets two companions:
-//   <id>.preview.svg – the handwriting on light paper, refreshed after saves.
-//                      Named by ID, so renames never break the embed and two
-//                      "Sheet 1" canvases in different folders never collide.
-//   <Name>.md        – a note embedding the preview, created once and then left
-//                      to the user, so their own text below the embed survives.
+//   <Name>.md        – a note next to it embedding the preview, created once and
+//                      then left to the user, so their own text survives.
+//   Paperlink Previews/<id>.svg – the handwriting on light paper, refreshed
+//                      after saves. One folder per vault keeps canvas folders
+//                      clean; the ID keeps names unique and stable on renames.
 
 const PAPER = '#fffdf5';
 const INK = '#24231f';
@@ -16,7 +16,12 @@ const PAGE_WIDTH = 900;
 const PADDING = 40;
 const MIN_HEIGHT = 240;
 
-export const previewName = id => id + '.preview.svg';
+export const PREVIEW_FOLDER = 'Paperlink Previews';
+// Earlier versions put "<id>.preview.svg" next to the canvas.
+export const legacyPreviewName = id => id + '.preview.svg';
+const embed = id => '![[' + id + '.svg]]';
+
+export const previewPath = (vault, id) => path.join(vault, PREVIEW_FOLDER, id + '.svg');
 
 const escapeXml = text => text.replace(/[<>&"]/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[char]);
 
@@ -70,9 +75,27 @@ async function replaceFile(filename, content) {
 }
 
 export async function writePreview(file, document) {
-  const filename = path.join(path.dirname(file), previewName(document.id));
+  const vault = await obsidianVault(file);
+  if (!vault) return null;
+  const filename = previewPath(vault, document.id);
+  await mkdir(path.dirname(filename), { recursive: true });
   await replaceFile(filename, renderPreview(document));
+  await migrateLegacyPreview(file, document.id);
   return filename;
+}
+
+// Points an earlier note at the preview folder (only the embed line changes)
+// and removes the old preview next to the canvas.
+async function migrateLegacyPreview(file, id) {
+  const legacy = path.join(path.dirname(file), legacyPreviewName(id));
+  if (!(await access(legacy).then(() => true, () => false))) return;
+  const note = await findNote(path.dirname(file), id);
+  if (note) {
+    const text = await readFile(note, 'utf8');
+    const updated = text.replace('![[' + legacyPreviewName(id) + ']]', embed(id));
+    if (updated !== text) await replaceFile(note, updated);
+  }
+  await unlink(legacy).catch(() => {});
 }
 
 const FRONTMATTER_ID = /^---\r?\n(?:.*\r?\n)*?paperlink: *([a-f0-9-]{36}) *\r?\n/;
@@ -124,7 +147,7 @@ export async function ensureNote(file, document) {
   if (existing) return { path: existing, created: false };
   const content = [
     '---', 'paperlink: ' + document.id, '---', '',
-    '![[' + previewName(document.id) + ']]', '',
+    embed(document.id), '',
     'Open on your iPad: `paper open ' + document.id.slice(0, 8) + '`', ''
   ].join('\n');
   // Files from earlier versions are named by ID; their note takes the title.

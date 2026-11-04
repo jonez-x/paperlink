@@ -2,7 +2,7 @@ import { access, copyFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { canvasBase, findCanvasFiles, isCanvasFile, obsidianVault } from './documents.js';
-import { findNote, findNoteInVault, freeName, previewName } from './preview.js';
+import { findNote, findNoteInVault, freeName, legacyPreviewName, previewPath } from './preview.js';
 import { readCanvas } from './store.js';
 
 const exists = file => access(file).then(() => true, () => false);
@@ -17,7 +17,7 @@ async function moveFile(from, to, { overwrite = false } = {}) {
   }
 }
 
-// Moves or renames a canvas together with its preview and note.
+// Moves or renames a canvas together with its note.
 export async function moveCanvas(file, id, destination, { withNote = true } = {}) {
   if (!isCanvasFile(destination)) throw new Error('The destination must end in .paperlink.');
   await readCanvas(file, id);
@@ -26,9 +26,13 @@ export async function moveCanvas(file, id, destination, { withNote = true } = {}
   const from = path.dirname(file), to = path.dirname(destination);
   await mkdir(to, { recursive: true });
   const note = withNote ? await findNote(from, id) : null;
+  const oldVault = await obsidianVault(file);
   await moveFile(file, destination);
-  const preview = path.join(from, previewName(id));
-  if (from !== to && await exists(preview)) await moveFile(preview, path.join(to, previewName(id)), { overwrite: true });
+  // Leaving a vault leaves no orphaned preview behind.
+  if (oldVault && oldVault !== await obsidianVault(destination)) await unlink(previewPath(oldVault, id)).catch(() => {});
+  // Previews live in the vault's preview folder; only ones from earlier versions sit next to the canvas.
+  const legacyPreview = path.join(from, legacyPreviewName(id));
+  if (from !== to && await exists(legacyPreview)) await moveFile(legacyPreview, path.join(to, legacyPreviewName(id)), { overwrite: true });
   let movedNote = null;
   if (note) {
     // A note still named like the canvas follows a rename; a name the user chose stays.
@@ -69,4 +73,31 @@ export async function followNote(file, id) {
   const extension = path.basename(file).slice(canvasBase(file).length);
   const destination = await freeName(path.dirname(note), canvasBase(file), extension);
   return (await moveCanvas(file, id, destination, { withNote: false })).path;
+}
+
+// The system trash, so deleting stays reversible.
+function trashDirectory() {
+  if (process.env.PAPERLINK_TRASH) return process.env.PAPERLINK_TRASH;
+  return process.platform === 'darwin' ? path.join(homedir(), '.Trash') : path.join(homedir(), '.local', 'share', 'Trash', 'files');
+}
+
+export async function trash(file) {
+  const directory = trashDirectory();
+  await mkdir(directory, { recursive: true });
+  const extension = path.extname(file);
+  const target = await freeName(directory, path.basename(file, extension), extension);
+  await moveFile(file, target);
+  return target;
+}
+
+// Moves a canvas, its note and its preview to the trash.
+export async function deleteCanvas(file, id) {
+  const removed = [];
+  const vault = await obsidianVault(file);
+  const note = await findNote(path.dirname(file), id);
+  const previews = [vault && previewPath(vault, id), path.join(path.dirname(file), legacyPreviewName(id))].filter(Boolean);
+  for (const candidate of [file, note, ...previews]) {
+    if (candidate && await exists(candidate)) { await trash(candidate); removed.push(candidate); }
+  }
+  return removed;
 }

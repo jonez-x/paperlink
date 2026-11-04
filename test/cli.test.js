@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 
 async function sandbox() {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'paperlink-cli-')));
-  const env = { ...process.env, PAPERLINK_CONFIG: path.join(root, 'config', 'config.json'), PAPERLINK_LOCK_DIR: path.join(root, 'locks') };
+  const env = { ...process.env, PAPERLINK_CONFIG: path.join(root, 'config', 'config.json'), PAPERLINK_LOCK_DIR: path.join(root, 'locks'), PAPERLINK_TRASH: path.join(root, 'Trash') };
   delete env.PAPERLINK_PORT;
   const bin = path.resolve('bin/paper.js');
   // Commands run from the sandbox, so relative canvas paths land there.
@@ -65,7 +65,7 @@ test('machine interface: canvas files anywhere, background server, links and err
     const inVault = await paper('new', 'Vault/Module X/Exercise 1', '--title', 'Exercise 1 · Analysis');
     assert.equal(inVault.title, 'Exercise 1 · Analysis');
     assert.equal(inVault.note, path.join(root, 'Vault', 'Module X', 'Exercise 1.md'));
-    assert.match(await readFile(inVault.note, 'utf8'), new RegExp('!\\[\\[' + inVault.id + '\\.preview\\.svg\\]\\]'));
+    assert.match(await readFile(inVault.note, 'utf8'), new RegExp('!\\[\\[' + inVault.id + '\\.svg\\]\\]'));
 
     const started = await paper('start');
     assert.equal(started.running, true);
@@ -122,7 +122,7 @@ test('machine interface: canvas files anywhere, background server, links and err
     await rename(movedCanvas.note, path.join(root, 'Vault', 'Module Z', 'Exercise 1.md'));
     assert.equal((await request('/api/canvases/' + inVault.id, 'PUT', { revision: 1, operationId: 'after-note-move', strokes })).status, 200);
     await new Promise(resolve => setTimeout(resolve, 2200));
-    assert.deepEqual((await readdir(path.join(root, 'Vault', 'Module Z'))).sort(), ['Exercise 1.md', 'Exercise 1.paperlink', inVault.id + '.preview.svg'].sort());
+    assert.deepEqual((await readdir(path.join(root, 'Vault', 'Module Z'))).sort(), ['Exercise 1.md', 'Exercise 1.paperlink']);
     inVault.path = path.join(root, 'Vault', 'Module Z', 'Exercise 1.paperlink');
 
     // Moved files are reported; forgetting keeps the file.
@@ -130,7 +130,7 @@ test('machine interface: canvas files anywhere, background server, links and err
     assert.equal((await paper('list')).find(canvas => canvas.id === offline.id).missing, true);
     assert.match(await fails('open', offline.id), /no longer at/);
     assert.equal((await paper('open', 'Moved')).id, offline.id, 'reopening by the new path updates the list');
-    assert.equal((await paper('forget', 'Moved')).forgotten, offline.id);
+    assert.equal((await paper('forget', 'Moved'))[0].forgotten, offline.id);
     assert.ok(!(await paper('list')).some(canvas => canvas.id === offline.id));
 
     const blocked = await fetch('http://127.0.0.1:' + port + '/cli/status', { method: 'POST', headers: { Origin: 'http://evil.example' }, body: '{}' });
@@ -142,11 +142,23 @@ test('machine interface: canvas files anywhere, background server, links and err
     assert.equal((await paper('status')).running, false);
 
     // Stopping flushes the pending preview of the browser edit.
-    assert.match(await readFile(path.join(root, 'Vault', 'Module Z', inVault.id + '.preview.svg'), 'utf8'), /<path d="M 10 10 l 0\.01 0 L 30 40"\/>/);
+    assert.match(await readFile(path.join(root, 'Vault', 'Paperlink Previews', inVault.id + '.svg'), 'utf8'), /<path d="M 10 10 l 0\.01 0 L 30 40"\/>/);
     const refreshed = await paper('preview');
     assert.deepEqual(refreshed.map(result => result.id), [inVault.id], 'only canvases inside a vault');
     assert.equal(refreshed[0].noteCreated, false, 'existing notes are kept, not duplicated');
     assert.match(await fails('preview', 'Uni/Sheet 4'), /not inside an Obsidian vault/);
+
+    // Deleting asks scripts for --yes and moves canvas, note and preview to the trash.
+    assert.match(await fails('delete', 'exercise'), /--yes/);
+    const deleted = await paper('delete', 'exercise', '--yes');
+    assert.equal(deleted[0].trashed.length, 3);
+    assert.deepEqual((await readdir(path.join(root, 'Vault', 'Module Z'))), []);
+    assert.deepEqual((await readdir(path.join(root, 'Trash'))).sort(), ['Exercise 1.md', 'Exercise 1.paperlink', inVault.id + '.svg'].sort());
+    assert.ok(!(await paper('list')).some(canvas => canvas.id === inVault.id));
+    const remaining = (await paper('list')).length;
+    assert.equal((await paper('forget', '--all', '--yes')).length, remaining);
+    assert.deepEqual(await paper('list'), []);
+    assert.ok((await readdir(path.join(root, 'Uni'))).includes('Sheet 4.paperlink'), 'forget keeps files');
   } finally {
     await paper('stop').catch(() => {});
     await rm(root, { recursive: true, force: true });

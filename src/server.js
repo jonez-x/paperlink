@@ -169,6 +169,14 @@ export async function serve({ port, lan, obsidian = true }) {
         });
         return json(res, 200, result);
       }
+      case '/cli/forget': {
+        // Before the CLI deletes or forgets a canvas: no preview may recreate files.
+        clearTimeout(pendingPreviews.get(input.id)?.timer);
+        pendingPreviews.delete(input.id);
+        await serialize(() => {});
+        index.delete(input.id);
+        return json(res, 200, { forgotten: input.id });
+      }
       case '/cli/open': {
         // The CLI may just have recorded a new path for a moved file.
         await reindex();

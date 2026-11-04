@@ -12,7 +12,7 @@ import { serve } from './server.js';
 import { canvasBase, canvasPath, createCanvas, EXTENSION, findCanvasFiles, folderEntries, isCanvasFile, obsidianVault, safeFileName } from './documents.js';
 import { configPath, expandHome, loadConfig, saveConfig, stateDirectory, validPort } from './config.js';
 import { forget, loadRegistry, relocate, remember } from './registry.js';
-import { findMoved, moveCanvas } from './move.js';
+import { deleteCanvas, findMoved, moveCanvas } from './move.js';
 import { readCanvas } from './store.js';
 import { writeObsidianFiles } from './preview.js';
 import { renderQr } from './qr.js';
@@ -25,7 +25,7 @@ const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 class CliError extends Error {}
 
 // ── Arguments ────────────────────────────────────────────────────────────────
-const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start']);
+const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start', 'all', 'yes']);
 const VALUE_FLAGS = new Set(['port', 'title', 'from-browser']);
 
 export function parseArguments(argv) {
@@ -127,6 +127,8 @@ async function callServer(ctx, command, payload = {}) {
     });
   } catch { return null; }
   const result = await response.json().catch(() => ({ error: 'Port ' + ctx.port + ' is used by another program.' }));
+  // `paper` always runs the current code, a background server keeps what it started with.
+  if (response.status === 404 && result.error === 'Unknown CLI command.') throw new CliError('The running server is older than this command. Restart it with `paper stop` and `paper start`.');
   if (!response.ok) throw new CliError(result.error);
   return result;
 }
@@ -422,18 +424,95 @@ async function cmdMove(ctx, positional) {
   const viaServer = await callServer(ctx, 'move', { id: canvas.id, destination });
   const result = viaServer ?? await moveCanvas(canvas.path, canvas.id, destination);
   await relocate(canvas.id, result.path);
-  // Moved into a vault: the note and preview appear there too.
-  const added = result.note ? null : await obsidianFiles(ctx, result.path, await readCanvas(result.path, canvas.id));
-  const note = result.note ?? added?.note ?? null;
+  // Inside a vault the preview is refreshed there; moved into one, a note appears too.
+  const added = await obsidianFiles(ctx, result.path, await readCanvas(result.path, canvas.id));
+  const note = added?.note ?? result.note ?? null;
   emit(ctx, { id: canvas.id, title: canvas.title, path: result.path, note }, () =>
     ok('Moved ' + canvas.title + c.muted(' → ' + plain(prettyPath(result.path)))) + (note ? '\n' + ok('Note ' + c.muted('· ' + plain(prettyPath(note)))) : ''));
 }
 
-async function cmdForget(ctx, positional) {
+// Canvases named on the command line, or all of them with --all.
+async function targets(ctx, positional) {
+  if (ctx.flags.all) return knownCanvases();
   const canvas = await findCanvas(ctx, positional.join(' '), { allowMissing: true });
-  if (!canvas) return;
-  await forget(canvas.id);
-  emit(ctx, { forgotten: canvas.id, path: canvas.path }, () => ok('Removed ' + canvas.title + ' from the list ' + c.muted('· the file is untouched')));
+  return canvas ? [canvas] : [];
+}
+
+async function confirmed(ctx, message) {
+  if (ctx.flags.yes) return true;
+  if (!ctx.interactive) throw new CliError(message + ' Add --yes to confirm.');
+  return ui.confirm({ message, initial: false });
+}
+
+// Deleting moves canvas, note and preview to the trash, so it can be undone there.
+async function cmdDelete(ctx, positional) {
+  const canvases = await targets(ctx, positional);
+  if (!canvases.length) return emit(ctx, [], () => '  ' + c.muted('No canvases to delete.'));
+  const what = canvases.length === 1 ? '"' + canvases[0].title + '"' : 'all ' + canvases.length + ' canvases';
+  if (!(await confirmed(ctx, 'Move ' + what + ' with notes and previews to the Trash?'))) return;
+  const results = [];
+  for (const canvas of canvases) {
+    await callServer(ctx, 'forget', { id: canvas.id });
+    const trashed = canvas.missing ? [] : await deleteCanvas(canvas.path, canvas.id);
+    await forget(canvas.id);
+    results.push({ id: canvas.id, title: canvas.title, trashed });
+  }
+  emit(ctx, results, () => results.map(result => ok('Deleted ' + result.title + c.muted(result.trashed.length ? ' · ' + result.trashed.length + ' file' + (result.trashed.length === 1 ? '' : 's') + ' in the Trash' : ' · file was already gone'))).join('\n'));
+}
+
+async function cmdForget(ctx, positional) {
+  const canvases = await targets(ctx, positional);
+  if (ctx.flags.all && canvases.length && !(await confirmed(ctx, 'Remove all ' + canvases.length + ' canvases from the list? Files stay where they are.'))) return;
+  for (const canvas of canvases) {
+    await callServer(ctx, 'forget', { id: canvas.id });
+    await forget(canvas.id);
+  }
+  emit(ctx, canvases.map(canvas => ({ forgotten: canvas.id, path: canvas.path })), () => canvases.length
+    ? canvases.map(canvas => ok('Removed ' + canvas.title + ' from the list ' + c.muted('· the file is untouched'))).join('\n')
+    : '  ' + c.muted('The list is already empty.'));
+}
+
+// Interactive list: pick a canvas, then act on it.
+async function browse(ctx) {
+  for (;;) {
+    const canvases = await knownCanvases();
+    if (!canvases.length) return console.log('  ' + c.muted('No canvases yet. Create one with New canvas.'));
+    const missing = canvases.filter(canvas => canvas.missing);
+    const choice = await ui.select({
+      message: 'Canvases', quiet: true,
+      choices: [
+        ...canvases.map(canvas => ({ label: canvas.title, value: { canvas }, hint: canvas.missing ? 'missing' : plain(prettyPath(path.dirname(canvas.path))) + ' · ' + ago(canvas.openedAt) })),
+        { separator: '' },
+        ...(missing.length ? [{ label: 'Remove missing from list', value: { forgetMissing: true }, hint: String(missing.length) }] : []),
+        { label: 'Delete all…', value: { deleteAll: true }, hint: 'to the Trash' },
+        { label: 'Back', value: { back: true } }
+      ]
+    });
+    if (!choice || choice.back) return;
+    ui.clearScreen();
+    if (choice.forgetMissing) { for (const canvas of missing) { await callServer(ctx, 'forget', { id: canvas.id }); await forget(canvas.id); } continue; }
+    if (choice.deleteAll) { await cmdDelete({ ...ctx, flags: { ...ctx.flags, all: true } }, []); await ui.pause(); continue; }
+    const { canvas } = choice;
+    console.log(canvasCard(canvas) + '\n');
+    const action = await ui.select({
+      message: 'What should happen with it?', quiet: true,
+      choices: [
+        { label: 'Open', value: 'open', disabled: canvas.missing, hint: 'QR code for the iPad' },
+        { label: 'Move or rename', value: 'move', disabled: canvas.missing },
+        { label: 'Delete', value: 'delete', hint: 'canvas, note and preview to the Trash' },
+        { label: 'Remove from list', value: 'forget', hint: 'keeps the file' },
+        { label: 'Back', value: 'back' }
+      ]
+    });
+    if (!action || action === 'back') { ui.clearScreen(); continue; }
+    if (action === 'open') await cmdOpen(ctx, [canvas.id]);
+    if (action === 'move') await cmdMove(ctx, [canvas.id]);
+    if (action === 'delete') await cmdDelete(ctx, [canvas.id]);
+    if (action === 'forget') await cmdForget(ctx, [canvas.id]);
+    console.log();
+    await ui.pause();
+    ui.clearScreen();
+  }
 }
 
 async function cmdDrafts(ctx) {
@@ -505,8 +584,7 @@ async function home(ctx) {
       choices: [
         { label: 'New canvas', value: 'new', hint: 'pick a folder, scan, write' },
         { label: 'Open canvas', value: 'open', disabled: !recent.length, hint: recent.length ? 'last: ' + recent[0].title : 'none yet' },
-        { label: 'All canvases', value: 'list' },
-        { label: 'Move or rename canvas', value: 'move', disabled: !recent.length },
+        { label: 'All canvases', value: 'list', hint: 'open, move, delete' },
         status ? { label: 'Show connection QR', value: 'qr' } : { label: 'Start server', value: 'start', hint: 'runs in the background' },
         { label: 'Import browser draft', value: 'import', disabled: !status?.drafts, hint: status ? status.drafts + ' unsaved' : 'needs the server' },
         { separator: '' },
@@ -521,8 +599,7 @@ async function home(ctx) {
     try {
       if (choice === 'new') await cmdNew(ctx, []);
       if (choice === 'open') await cmdOpen(ctx, []);
-      if (choice === 'list') await cmdList(ctx);
-      if (choice === 'move') await cmdMove(ctx, []);
+      if (choice === 'list') { ui.clearScreen(); await browse(ctx); continue; }
       if (choice === 'start') await cmdStart(ctx);
       if (choice === 'qr') console.log(qrSection(ctx, status.links, 'Scan with your iPad to connect'));
       if (choice === 'import') await cmdImport(ctx, []);
@@ -589,7 +666,8 @@ function helpText() {
     command('open <file|id|title>', 'print links and QR code for a canvas'),
     command('list', 'canvases created or opened on this computer'),
     command('move <canvas> <folder/ | new path>', 'move or rename with note and preview'),
-    command('forget <id|title>', 'remove from the list, keep the file'),
+    command('delete <canvas> | --all [--yes]', 'move canvas, note and preview to the Trash'),
+    command('forget <canvas> | --all', 'remove from the list, keep the file'),
     command('preview [file|id|title]', 'write Obsidian notes and previews'),
     command('drafts', 'unsaved drafts from connected tabs'),
     command('import "<folder>/<name>" --from-browser <id>', 'save a draft as a canvas'),
@@ -608,6 +686,7 @@ function helpText() {
     command('--port <n>', 'server port (default from config, 8080)'),
     command('--lan / --no-lan', 'allow devices on your network'),
     command('--obsidian / --no-obsidian', 'Obsidian notes for this command or server'),
+    command('--yes', 'confirm deleting without a prompt'),
     command('--json', 'machine-readable output'),
     command('--qr / --no-qr', 'force or hide QR codes'),
     command('--no-start', 'never offer to start the server'),
@@ -641,6 +720,7 @@ export async function main(argv) {
       case 'list': return await cmdList(ctx);
       case 'open': return await cmdOpen(ctx, rest);
       case 'move': case 'mv': return await cmdMove(ctx, rest);
+      case 'delete': case 'rm': return await cmdDelete(ctx, rest);
       case 'forget': return await cmdForget(ctx, rest);
       case 'preview': return await cmdPreview(ctx, rest);
       case 'drafts': return await cmdDrafts(ctx);

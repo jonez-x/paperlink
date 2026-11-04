@@ -88,6 +88,13 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - CLI: `paper move <canvas> <folder/|new path>` (alias `mv`, interactive folder picker + name), menu entry; `list`/`open` heal moved files via `findMoved`.
 - Verified: npm test (15 tests incl. rename/move with companions, discovery in and outside vaults, note following both as unit and through the running server, `paper move` via server, Finder move healed by API and `list`).
 
+## Preview folder and deleting (2026-11-04, Claude Code)
+
+- User found the ID-named SVG next to the note ugly and chose one preview folder per vault: `<vault>/Paperlink Previews/<id>.svg`, embedded as `![[<id>.svg]]`. Canvas folders now only show the note. Older `<id>.preview.svg` files are migrated on the next preview write (only the embed line in the note changes, the old file is removed). Moving a canvas out of a vault removes its preview there.
+- `paper delete <canvas> | --all` moves canvas, note and preview to the Trash (`~/.Trash` on macOS, `PAPERLINK_TRASH` overrides); scripts must pass `--yes`. `paper forget --all`. Server route `/cli/forget` cancels pending previews and drops the canvas before deletion.
+- Menu: All canvases opens a picker; per canvas Open / Move or rename / Delete / Remove from list; plus Delete all and Remove missing.
+- Verified: npm test (16 tests incl. legacy preview migration, trash on delete, leaving a vault, CLI delete/forget --all with a sandboxed trash). Interactive delete driven in a pseudo-terminal.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Then device pairing with stable links from the note. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
