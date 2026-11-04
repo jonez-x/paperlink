@@ -398,7 +398,8 @@ test('assistant commands: inspect, snapshots of a region, notes that appear live
     const { width, height } = (await snapshot.getPage(1)).getViewport({ scale: 1 });
     await snapshot.destroy();
     assert.deepEqual([Math.round(width * 10) / 10, Math.round(height * 10) / 10], [297.6, 198.4]);
-    if (process.platform === 'darwin') {
+    // PNG rendering uses the system: Quick Look, Windows' PDF engine or pdftoppm (installed in CI).
+    if (process.platform !== 'linux' || process.env.CI) {
       const png = await paper('snapshot', 'Answers');
       assert.ok((await readFile(png.path)).subarray(1, 4).equals(Buffer.from('PNG')));
     }

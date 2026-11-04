@@ -1,4 +1,6 @@
 import { access, copyFile, mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { canvasBase, findCanvasFiles, isCanvasFile, obsidianVault } from './documents.js';
@@ -95,12 +97,25 @@ function trashDirectory() {
 }
 
 export async function trash(file) {
+  if (process.platform === 'win32' && !process.env.PAPERLINK_TRASH) return recycle(file);
   const directory = trashDirectory();
   await mkdir(directory, { recursive: true });
   const extension = path.extname(file);
   const target = await freeName(directory, path.basename(file, extension), extension);
   await moveFile(file, target);
   return target;
+}
+
+// Windows has no trash folder to move into; the Recycle Bin is reached through
+// .NET. The path goes in an environment variable, never into the script.
+async function recycle(file) {
+  const script = "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:PAPERLINK_RECYCLE, 'OnlyErrorDialogs', 'SendToRecycleBin')";
+  try {
+    await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, PAPERLINK_RECYCLE: file }, timeout: 30000, windowsHide: true });
+  } catch (error) {
+    throw new Error('Could not move ' + file + ' to the Recycle Bin: ' + (error.stderr?.trim() || error.message));
+  }
+  return 'Recycle Bin';
 }
 
 // Moves a canvas, its note and its preview to the trash.

@@ -30,6 +30,9 @@ export async function pdfPageSizes(file) {
     document = await getDocument({ data: new Uint8Array(await readFile(file)), verbosity: 0, isEvalSupported: false }).promise;
   } catch (error) {
     if (error.code === 'ENOENT') throw new Error('PDF not found: ' + file);
+    if (['EPERM', 'EACCES'].includes(error.code)) {
+      throw new Error('No permission to read ' + file + '. macOS asks each app before it may read Downloads, Desktop, Documents and iCloud Drive: allow your terminal app in System Settings → Privacy & Security → Files and Folders (or Full Disk Access), then try again.');
+    }
     throw new Error('Not a readable PDF: ' + path.basename(file) + (error.message ? ' (' + error.message + ')' : ''));
   }
   try {

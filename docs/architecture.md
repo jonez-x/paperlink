@@ -12,7 +12,7 @@ The server performs atomic writes and is authoritative during editing. Every cha
 
 ## Proposed CLI
 
-The prototype implements `new/open/list/forget/preview/drafts/import` on canvas files plus `start/serve/stop/status/config`. A canvas is a `.paperlink` file anywhere; there is no configured storage root. Other commands below describe the target interface. Canvas management and draft imports run through the CLI. The browser follows a canvas link and autosaves; no browser file-management menu is provided.
+The prototype implements `new/open/list/move/delete/forget/export/preview/drafts/import`, the assistant commands `inspect/snapshot/annotate`, `mcp` and `start/serve/stop/status/pair/devices/unpair/config`; see [reference.md](reference.md). A canvas is a `.paperlink` file anywhere; there is no configured storage root. Other commands below describe the target interface. Canvas management and draft imports run through the CLI. The browser follows a canvas link and autosaves; no browser file-management menu is provided.
 
 ```sh
 paper serve --port 8080 --lan
@@ -28,6 +28,22 @@ paper mcp
 ```
 
 One server manages multiple documents. One server per user serves every canvas the local CLI has created or opened; a lock prevents a second server. Agents receive stable IDs, JSON output, actionable errors and concise command documentation. Annotations use page coordinates and appear in connected browsers. Devices reach only canvases on the CLI's list, never arbitrary paths.
+
+## MCP adapter
+
+`paper mcp` (src/mcp.js) speaks JSON-RPC 2.0 over stdin/stdout, one message per line, without the MCP SDK so the project stays dependency-free. It supports `initialize`, `ping`, `tools/list` and `tools/call`. Each tool runs the matching CLI command with `--json` in a child process, so validation, server routing (edits through a running server reach open tabs live) and errors stay identical to the CLI. Tool errors are returned as results with `isError`, protocol errors as JSON-RPC errors. `snapshot_page` renders to a temporary PNG and returns it as an image content block.
+
+## Platform layer
+
+Platform-specific calls are isolated: settings folder (src/config.js), trash and Recycle Bin (src/move.js), PDF-to-PNG rendering (src/raster.js: Quick Look, the WinRT PDF API through Windows PowerShell, pdftoppm), opening and copying links (src/cli.js) and the assistant's `paper` shim (src/assistant.js, a shell script plus `paper.cmd` on Windows). Paths handed to PowerShell travel in environment variables, never inside the script. `.github/workflows/test.yml` runs `npm test` on macOS, Windows and Linux.
+
+## Development
+
+```sh
+npm test
+```
+
+Open source is the goal. MIT is the proposed license. Licensing and public release remain undecided. The product works without an account, subscription or bundled model service; an optional connected assistant processes requested content under its provider's terms.
 
 ## Assistant interaction and triggers
 

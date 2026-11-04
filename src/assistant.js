@@ -54,8 +54,12 @@ async function shimDirectory() {
   const directory = path.join(stateDirectory(), 'bin');
   await mkdir(directory, { recursive: true });
   const shim = path.join(directory, 'paper');
-  await writeFile(shim, `#!/bin/sh\nexec "${process.execPath}" "${BIN}" "$@"\n`);
+  // Forward slashes, so Git Bash (Claude Code's shell on Windows) reads the paths too.
+  const unix = file => file.split(path.sep).join('/');
+  await writeFile(shim, `#!/bin/sh\nexec "${unix(process.execPath)}" "${unix(BIN)}" "$@"\n`);
   await chmod(shim, 0o755);
+  // cmd.exe and PowerShell look for paper.cmd.
+  if (process.platform === 'win32') await writeFile(path.join(directory, 'paper.cmd'), `@"${process.execPath}" "${BIN}" %*\r\n`);
   return directory;
 }
 
@@ -65,7 +69,7 @@ export async function runAssistant({ setting, prompt, port, onExit }) {
   const log = await open(path.join(stateDirectory(), 'assistant.log'), 'a');
   await log.write('\n--- ' + new Date().toISOString() + ' ' + command + '\n');
   const child = spawn(command, args, {
-    cwd: stateDirectory(), stdio: ['ignore', log.fd, log.fd],
+    cwd: stateDirectory(), stdio: ['ignore', log.fd, log.fd], windowsHide: true,
     env: { ...process.env, PATH: shim + path.delimiter + (process.env.PATH || ''), PAPERLINK_PORT: String(port) }
   });
   const timeout = setTimeout(() => child.kill('SIGTERM'), 5 * 60 * 1000);
@@ -77,6 +81,8 @@ export async function runAssistant({ setting, prompt, port, onExit }) {
     log.close().catch(() => {});
     onExit({ ok, message });
   };
-  child.once('error', error => finish(false, error.code === 'ENOENT' ? command + ' was not found on this computer.' : error.message));
+  child.once('error', error => finish(false, error.code === 'ENOENT' ? command + ' was not found on this computer.' +
+    // Without a shell Windows only starts .exe files, not npm's .cmd wrappers.
+    (process.platform === 'win32' ? ' On Windows it must be an .exe on the PATH (for Claude Code, use the native installer).' : '') : error.message));
   child.once('exit', code => finish(code === 0, code === 0 ? '' : 'The assistant stopped with code ' + code + '. See ' + path.join(stateDirectory(), 'assistant.log') + '.'));
 }

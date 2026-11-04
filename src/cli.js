@@ -2,9 +2,8 @@
 //   humans: `paper` opens a keyboard-driven menu; commands ask for missing input.
 //   scripts and AI agents: commands with flags, JSON on stdout when not in a
 //   terminal (or with --json), errors as JSON on stderr and a non-zero exit code.
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { promisify } from 'node:util';
 import { closeSync, existsSync, openSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { mkdir, rename as renameFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -21,6 +20,8 @@ import { validAssistant } from './assistant.js';
 import { readCanvas, saveOperations, validAnnotation } from './store.js';
 import { writeObsidianFiles } from './preview.js';
 import { renderQr } from './qr.js';
+import { pdfToPng } from './raster.js';
+import { serveMcp } from './mcp.js';
 import * as ui from './tui.js';
 
 const { c } = ui;
@@ -88,7 +89,7 @@ function prettyPath(absolute) {
   if (absolute.startsWith(obsidian + path.sep)) return 'Obsidian › ' + absolute.slice(obsidian.length + 1).split(path.sep).join(' › ');
   const icloud = path.join(homedir(), 'Library/Mobile Documents/com~apple~CloudDocs');
   if (absolute.startsWith(icloud + path.sep)) return 'iCloud Drive › ' + absolute.slice(icloud.length + 1).split(path.sep).join(' › ');
-  return absolute.startsWith(homedir() + path.sep) ? '~/' + absolute.slice(homedir().length + 1) : absolute;
+  return absolute.startsWith(homedir() + path.sep) ? '~' + path.sep + absolute.slice(homedir().length + 1) : absolute;
 }
 const plain = text => String(text).replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -104,15 +105,60 @@ function ago(iso) {
 const deviceLink = links => (links || []).find(link => !link.startsWith('http://localhost'));
 const wantsQr = ctx => !ctx.flags['no-qr'] && (ctx.flags.qr || !ctx.json);
 
-function qrSection(ctx, links, label) {
+// A clickable link (OSC 8) in terminals that support it; the full URL stays visible.
+const hyperlink = url => process.stdout.isTTY ? '\x1b]8;;' + url + '\x1b\\' + url + '\x1b]8;;\x1b\\' : url;
+const localLink = links => (links || []).find(link => link.startsWith('http://localhost'));
+
+function qrSection(ctx, links, label, { showLinks = true } = {}) {
   const device = deviceLink(links);
+  const local = localLink(links);
   if (!device) {
-    return ['', '  ' + c.muted('Network access is off, so only this computer can connect:'), '  ' + links[0],
+    return ['', '  ' + c.muted('Network access is off, so only this computer can connect' + (showLinks ? ':' : '.')), ...(showLinks ? ['  ' + hyperlink(local || links[0])] : []),
       '  ' + c.muted('Allow your iPad with `paper config set lan true`, then restart the server.')].join('\n');
   }
-  if (!wantsQr(ctx)) return '  ' + device;
+  if (!wantsQr(ctx)) return '  ' + hyperlink(device);
+  if (!showLinks) return ['', '  ' + c.bold(label), ui.indent(renderQr(device), '  ')].join('\n');
   return ['', '  ' + c.bold(label), ui.indent(renderQr(device), '  '),
-    '  ' + c.muted(device.split('#')[0] + ' · one-time pairing code, valid for 15 minutes')].join('\n');
+    '  ' + c.muted('iPad  ') + hyperlink(device),
+    ...(local ? ['  ' + c.muted('Mac   ') + hyperlink(local)] : []),
+    '  ' + c.muted('Each link has its own one-time pairing code, valid for 15 minutes.')].join('\n');
+}
+// Opens a URL in the default browser, or copies text to the clipboard.
+function runTool(command, args, text) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: [text === undefined ? 'ignore' : 'pipe', 'ignore', 'ignore'] });
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve() : reject(new Error(command + ' exited with ' + code)));
+    if (text !== undefined) child.stdin.end(text);
+  });
+}
+const openInBrowser = url => process.platform === 'win32' ? runTool('rundll32', ['url.dll,FileProtocolHandler', url]) : runTool(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
+const copyToClipboard = text => process.platform === 'darwin' ? runTool('pbcopy', [], text)
+  : process.platform === 'win32' ? runTool('clip', [], text) : runTool('xclip', ['-selection', 'clipboard'], text);
+
+// Instead of printing links: open the canvas here or copy a link that works on any device.
+async function linkActions(links) {
+  const here = localLink(links) || links[0];
+  const anywhere = deviceLink(links) || here;
+  for (;;) {
+    const action = await ui.select({
+      message: 'On this computer',
+      choices: [
+        { label: 'Open canvas', value: 'open', hint: 'in the default browser' },
+        { label: 'Copy link', value: 'copy', hint: 'to the clipboard' + (anywhere === here ? '' : ' · works on any device in the network') },
+        { label: 'Done', value: null }
+      ],
+      quiet: true,
+      hint: '↑↓ move · enter select · esc done'
+    });
+    if (!action) return;
+    try {
+      if (action === 'open') { await openInBrowser(here); console.log(ok('Opened in the browser')); }
+      else { await copyToClipboard(anywhere); console.log(ok('Link copied ' + c.muted('· one-time pairing code, valid for 15 minutes'))); }
+    } catch {
+      console.log('  ' + c.danger('✗') + ' ' + (action === 'open' ? 'Could not open the browser.' : 'Could not copy.') + ' ' + c.muted('Link: ') + hyperlink(action === 'open' ? here : anywhere));
+    }
+  }
 }
 // JSON mode keeps stdout machine-readable; an explicit --qr goes to stderr.
 function jsonQr(ctx, links) {
@@ -155,7 +201,7 @@ async function startBackground(ctx) {
   const logFile = path.join(stateDirectory(), 'server.log');
   const log = openSync(logFile, 'a');
   const child = spawn(process.execPath, [BIN, 'serve', '--port', String(ctx.port), ctx.lan ? '--lan' : '--no-lan', ctx.obsidian ? '--obsidian' : '--no-obsidian', '--no-qr'], {
-    detached: true, stdio: ['ignore', log, log], env: { ...process.env, PAPERLINK_BACKGROUND: '1' }
+    detached: true, windowsHide: true, stdio: ['ignore', log, log], env: { ...process.env, PAPERLINK_BACKGROUND: '1' }
   });
   closeSync(log);
   let exited = false;
@@ -225,8 +271,9 @@ async function findCanvas(ctx, query, { allowMissing = false } = {}) {
 // Tab completion for folders, and with `files` also for matching files.
 function completeDirectory(value, files = null) {
   const expanded = expandHome(value || '~/');
-  const base = expanded.endsWith('/') ? expanded : path.dirname(expanded);
-  const prefix = expanded.endsWith('/') ? '' : path.basename(expanded);
+  const isDirectory = expanded.endsWith('/') || expanded.endsWith(path.sep);
+  const base = isDirectory ? expanded : path.dirname(expanded);
+  const prefix = isDirectory ? '' : path.basename(expanded);
   let names;
   try {
     names = readdirSync(base, { withFileTypes: true })
@@ -239,7 +286,7 @@ function completeDirectory(value, files = null) {
   let common = names[0];
   for (const name of names) while (!name.startsWith(common)) common = common.slice(0, -1);
   const single = names.length === 1 && statSync(path.join(base, common), { throwIfNoEntry: false })?.isDirectory();
-  const completed = path.join(base, common) + (single ? '/' : '');
+  const completed = path.join(base, common) + (single ? path.sep : '');
   return value?.startsWith('~') && completed.startsWith(homedir()) ? '~' + completed.slice(homedir().length) : completed;
 }
 
@@ -266,7 +313,7 @@ async function pickFolder(start = process.cwd(), action = 'Create here') {
     if (choice.save) { console.log(ok('Folder ' + c.muted('· ' + plain(prettyPath(current))))); return current; }
     if (choice.enter) current = choice.enter;
     if (choice.type) {
-      const answer = await ui.input({ message: 'Folder', initial: plain(prettyPath(current)).startsWith('~') ? plain(prettyPath(current)) + '/' : current + '/', complete: completeDirectory });
+      const answer = await ui.input({ message: 'Folder', initial: plain(prettyPath(current)).startsWith('~') ? plain(prettyPath(current)) + path.sep : current + path.sep, complete: completeDirectory });
       if (answer) current = path.resolve(expandHome(answer));
     }
     if (choice.create) {
@@ -275,6 +322,50 @@ async function pickFolder(start = process.cwd(), action = 'Create here') {
         validate: value => !value ? 'Enter a name.' : /[\\/]/.test(value) || value === '.' || value === '..' || value.startsWith('.') ? 'Use a single, visible folder name.' : ''
       });
       if (name) current = path.join(current, name);
+    }
+  }
+}
+
+
+// Browse for a PDF: folders and PDFs, newest PDFs first. Null when cancelled,
+// '' for blank pages.
+async function pickPdf(start = process.cwd()) {
+  const places = [['Downloads', '~/Downloads'], ['Desktop', '~/Desktop'], ['Documents', '~/Documents'], ['iCloud Drive', '~/Library/Mobile Documents/com~apple~CloudDocs']]
+    .map(([label, folder]) => [label, expandHome(folder)]).filter(([, folder]) => existsSync(folder));
+  let current = path.resolve(start);
+  for (;;) {
+    let entries = [], blocked = false;
+    try { entries = readdirSync(current, { withFileTypes: true }).filter(entry => !entry.name.startsWith('.')); }
+    catch (error) { blocked = ['EPERM', 'EACCES'].includes(error.code); }
+    const isFolder = entry => entry.isDirectory() || (entry.isSymbolicLink() && statSync(path.join(current, entry.name), { throwIfNoEntry: false })?.isDirectory());
+    const folders = entries.filter(entry => isFolder(entry) && entry.name !== 'node_modules').map(entry => entry.name).sort((a, b) => a.localeCompare(b));
+    const pdfs = entries.filter(entry => !isFolder(entry) && /\.pdf$/i.test(entry.name))
+      .map(entry => ({ name: entry.name, stats: statSync(path.join(current, entry.name), { throwIfNoEntry: false }) }))
+      .filter(entry => entry.stats).sort((a, b) => b.stats.mtimeMs - a.stats.mtimeMs);
+    const others = places.filter(([, folder]) => folder !== current);
+    const choices = [
+      { label: '○ Blank pages', value: { blank: true }, hint: 'no PDF' },
+      { label: '… Type a path', value: { type: true } },
+      ...(path.dirname(current) !== current ? [{ label: '↩ Up one level', value: { enter: path.dirname(current) } }] : []),
+      ...(blocked ? [{ separator: c.red('No access') + c.muted(' · allow your terminal under Privacy & Security → Files and Folders') }] : []),
+      ...(pdfs.length ? [{ separator: 'PDFs' }] : []),
+      ...pdfs.map(({ name, stats }) => ({ label: '▪ ' + name, value: { pdf: path.join(current, name) }, hint: Math.max(1, Math.round(stats.size / 1024)) + ' KB · ' + stats.mtime.toLocaleDateString() })),
+      ...(folders.length ? [{ separator: 'Folders' }] : []),
+      ...folders.map(name => ({ label: '▸ ' + name, value: { enter: path.join(current, name) } })),
+      ...(others.length ? [{ separator: 'Places' }] : []),
+      ...others.map(([label, folder]) => ({ label: '★ ' + label, value: { enter: folder } }))
+    ];
+    const choice = await ui.select({ message: 'PDF to write on  ' + c.muted(plain(prettyPath(current))), choices, quiet: true, initial: pdfs.length ? choices.findIndex(entry => entry.value?.pdf) : 0 });
+    if (!choice) return null;
+    if (choice.blank) { console.log(ok('Blank pages')); return ''; }
+    if (choice.pdf) { console.log(ok('PDF ' + c.muted('· ' + plain(prettyPath(choice.pdf))))); return choice.pdf; }
+    if (choice.enter) current = choice.enter;
+    if (choice.type) {
+      const answer = await ui.input({ message: 'PDF or folder', initial: plain(prettyPath(current)).startsWith('~') ? plain(prettyPath(current)) + path.sep : current + path.sep, complete: value => completeDirectory(value, /\.pdf$/i) });
+      if (!answer) continue;
+      const target = path.resolve(expandHome(answer));
+      if (/\.pdf$/i.test(target) && existsSync(target)) return target;
+      if (statSync(target, { throwIfNoEntry: false })?.isDirectory()) current = target;
     }
   }
 }
@@ -383,10 +474,9 @@ async function cmdNew(ctx, positional) {
   } else {
     if (!ctx.interactive) throw new CliError('Specify where to create it: paper new "<folder>/<name>" [--title TITLE] [--pdf FILE].');
     if (!pdf) {
-      const answer = await ui.input({ message: 'PDF to write on', placeholder: 'optional · enter for blank pages', complete: value => completeDirectory(value, /\.pdf$/i),
-        validate: value => !value || (/\.pdf$/i.test(value) && existsSync(path.resolve(expandHome(value)))) ? '' : 'Choose an existing PDF file, or leave empty.' });
+      const answer = await pickPdf();
       if (answer === null) return;
-      if (answer) pdf = path.resolve(expandHome(answer));
+      if (answer) pdf = answer;
     }
     title ??= await ui.input({ message: 'Title', initial: pdf ? path.basename(pdf, path.extname(pdf)) : '', placeholder: 'e.g. Analysis sheet 3', validate: value => value ? (value.length > 200 ? 'At most 200 characters.' : '') : 'Enter a title.' });
     if (title === null) return;
@@ -415,7 +505,9 @@ async function cmdOpen(ctx, positional) {
   await requireServer(ctx);
   const opened = await callServer(ctx, 'open', { id: document.id });
   jsonQr(ctx, opened.links);
-  emit(ctx, { ...opened, path: canvas.path }, () => '\n' + canvasCard({ ...opened, path: canvas.path }) + qrSection(ctx, opened.links, 'Scan to open on your iPad'));
+  const actions = ctx.interactive && opened.links?.length;
+  emit(ctx, { ...opened, path: canvas.path }, () => '\n' + canvasCard({ ...opened, path: canvas.path }) + qrSection(ctx, opened.links, 'Scan to open on another device', { showLinks: !actions }) + (actions ? '\n' : ''));
+  if (actions) await linkActions(opened.links);
 }
 
 async function cmdList(ctx) {
@@ -509,20 +601,17 @@ async function cmdSnapshot(ctx, positional) {
   const [x, y, width, height] = ctx.flags.region ? numbers(ctx.flags.region, 4, 'region') : [];
   const region = ctx.flags.region ? { x, y, width, height } : undefined;
   if (region && (region.width <= 0 || region.height <= 0)) throw new CliError('--region needs a positive width and height.');
-  const png = process.platform === 'darwin';
-  const output = ctx.flags.output ? path.resolve(expandHome(ctx.flags.output)) : path.join(stateDirectory(), 'snapshots', canvas.id.slice(0, 8) + '-p' + number + (png ? '.png' : '.pdf'));
+  const output = ctx.flags.output ? path.resolve(expandHome(ctx.flags.output)) : path.join(stateDirectory(), 'snapshots', canvas.id.slice(0, 8) + '-p' + number + '.png');
   await mkdir(path.dirname(output), { recursive: true });
   if (/\.pdf$/i.test(output)) await exportPdf(canvas.path, canvas.id, output, { pages: [number], region });
   else {
-    if (!png) throw new CliError('PNG snapshots need macOS; use --output <file>.pdf.');
-    // Quick Look renders the PDF as vectors at the requested size.
     const work = path.join(stateDirectory(), 'snapshots', 'work-' + randomBytes(6).toString('hex'));
     await mkdir(work, { recursive: true });
     try {
       const pdf = path.join(work, 'page.pdf');
       await exportPdf(canvas.path, canvas.id, pdf, { pages: [number], region });
-      await promisify(execFile)('qlmanage', ['-t', '-s', '1600', '-o', work, pdf], { timeout: 30000 });
-      await renameFile(pdf + '.png', output).catch(() => { throw new CliError('Could not render a PNG; try --output <file>.pdf.'); });
+      const png = await pdfToPng(pdf).catch(error => { throw new CliError('Could not render a PNG (' + (error.stderr?.trim().split('\n').pop() || error.message) + '); try --output <file>.pdf' + (process.platform === 'linux' ? ' or install poppler-utils' : '') + '.'); });
+      await renameFile(png, output).catch(() => { throw new CliError('Could not render a PNG; try --output <file>.pdf.'); });
     } finally { await rm(work, { recursive: true, force: true }); }
   }
   emit(ctx, { id: canvas.id, page: number, region: region ?? null, revision: document.revision, path: output }, () => ok('Snapshot of page ' + number + c.muted(' · revision ' + document.revision)) + '\n  ' + prettyPath(output));
@@ -871,6 +960,7 @@ function helpText() {
     command('annotate <canvas> --text "…" [--page N] [--at X,Y]', 'add a note on the assistant layer (--revision R)'),
     command('annotate <canvas> --remove <id> | --clear', 'remove notes'),
     command('preview [file|id|title]', 'write Obsidian notes and previews'),
+    command('mcp', 'MCP server on stdin/stdout for assistant apps'),
     command('drafts', 'unsaved drafts from connected tabs'),
     command('import "<folder>/<name>" --from-browser <id>', 'save a draft as a canvas'),
     '',
@@ -939,6 +1029,7 @@ export async function main(argv) {
       case 'annotate': return await cmdAnnotate(ctx, rest);
       case 'drafts': return await cmdDrafts(ctx);
       case 'import': return await cmdImport(ctx, rest);
+      case 'mcp': return await serveMcp({ version: VERSION });
       case 'init': throw new CliError('Libraries are gone: a canvas is a ' + EXTENSION + ' file wherever you create it. Try `paper new "<folder>/<name>"`.');
       default: throw new CliError('Unknown command ' + command + '. See `paper help`.');
     }

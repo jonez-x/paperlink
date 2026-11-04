@@ -13,7 +13,8 @@ export const DEFAULTS = Object.freeze({
 
 export function configPath() {
   if (process.env.PAPERLINK_CONFIG) return process.env.PAPERLINK_CONFIG;
-  const base = process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config');
+  // Windows keeps per-user settings in %APPDATA%.
+  const base = process.env.XDG_CONFIG_HOME || (process.platform === 'win32' && process.env.APPDATA) || path.join(homedir(), '.config');
   return path.join(base, 'paperlink', 'config.json');
 }
 
@@ -41,7 +42,7 @@ export async function saveConfig(config) {
 
 export function expandHome(input) {
   if (input === '~') return homedir();
-  if (input?.startsWith('~/')) return path.join(homedir(), input.slice(2));
+  if (input?.startsWith('~/') || input?.startsWith('~\\')) return path.join(homedir(), input.slice(2));
   return input;
 }
 

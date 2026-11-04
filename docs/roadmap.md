@@ -5,7 +5,7 @@
 | 1 · Handwriting | CLI launch, browser page, pen, eraser, undo, zoom, Light/Dark/System | Complete a real exercise on iPad without disruptive latency, accidental marks or jumping pages. |
 | 2 · Assignments and vault | Multi-page PDFs, extra pages, durable storage, Obsidian preview, PDF export | Strokes survive restart. Obsidian shows the preview and exports include backgrounds and annotations. |
 | 3 · Multiple devices | QR pairing, live updates, local buffering and reconnect | iPad and laptop show the same page. Disconnection loses no strokes and retries create no duplicates. |
-| 4 · Assistant | JSON CLI, snapshots, annotations, local triggers and optional MCP | An assistant reads a selection and its undoable feedback appears on both devices. |
+| 4 · Assistant | JSON CLI, snapshots, annotations, local triggers and optional MCP (all implemented; MCP via `paper mcp`) | An assistant reads a selection and its undoable feedback appears on both devices. |
 | Later | Infinite canvas, Obsidian editor plugin, persistent assistant sessions | Prioritize from real use of the complete workflow. |
 
 ## Current state and next milestone

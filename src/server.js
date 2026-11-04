@@ -158,9 +158,12 @@ export async function serve({ port, lan, obsidian = true, assistant = null }) {
     const now = Date.now();
     for (const [code, expires] of pairCodes) if (expires < now) pairCodes.delete(code);
     while (pairCodes.size >= 100) pairCodes.delete(pairCodes.keys().next().value);
-    const code = randomBytes(16).toString('hex');
-    pairCodes.set(code, now + 15 * 60 * 1000);
-    return links('/#pair=' + code + (canvasId ? '&canvas=' + canvasId : ''));
+    // One code per link, so opening the link on this computer leaves the QR code valid.
+    return links('').map(origin => {
+      const code = randomBytes(16).toString('hex');
+      pairCodes.set(code, now + 15 * 60 * 1000);
+      return origin + '/#pair=' + code + (canvasId ? '&canvas=' + canvasId : '');
+    });
   }
 
   // Paired devices by token hash; reloaded on a miss, at most once a second,

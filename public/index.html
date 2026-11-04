@@ -749,7 +749,11 @@ const linkParameters = new URLSearchParams(location.hash.slice(1));
 const pairCode = linkParameters.get('pair');
 const canvasFromLink = linkParameters.get('canvas');
 try { deviceToken = localStorage.getItem('paperlink-device-token') || ''; } catch {}
-if (location.hash) history.replaceState(null, '', location.pathname);
+// The one-time pairing code leaves the address; the canvas stays, so reloads,
+// new tabs and bookmarks reopen it instead of a local draft.
+if (location.hash) history.replaceState(null, '', location.pathname + (canvasFromLink ? '#canvas=' + canvasFromLink : ''));
+// A link opened in a tab that is already open only changes the hash.
+addEventListener('hashchange', () => location.reload());
 async function pair() {
   if (!pairCode) return;
   let deviceId;
@@ -918,6 +922,7 @@ function adopt(document, contents) {
   currentDocument = { id: document.id, title: document.title, revision: document.revision, assistant: Boolean(document.assistant) };
   loadPdf(document).catch(error => report('The PDF could not be loaded: ' + error.message, true));
   try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
+  if (location.hash !== '#canvas=' + document.id) history.replaceState(null, '', location.pathname + '#canvas=' + document.id);
   pages = contents;
   annotations = document.annotations ? document.annotations.slice() : [];
   past = []; future = []; incoming = []; saveBlocked = false; live = false;

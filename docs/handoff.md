@@ -1,6 +1,6 @@
 # Paperlink — agent handoff
 
-Updated 2026-11-03. Read this first, then README.md, AGENTS.md and docs/product.md, docs/architecture.md, docs/roadmap.md.
+Updated 2026-11-03. Read this first, then README.md (user-facing, kept short), AGENTS.md and docs/reference.md (all technical detail), docs/product.md, docs/architecture.md, docs/roadmap.md.
 
 ## Goal and decisions
 
@@ -173,3 +173,10 @@ Prior work used the GitHub connector to publish files because gh authentication 
 ## Keep this handoff current
 
 Record completed work, exact checks and limitations at each milestone. Update the corresponding Obsidian project handoff when accessible. Never include credentials.
+
+## MCP, Windows support and README split (2026-11-04, Claude Code)
+
+- `paper mcp` (src/mcp.js): dependency-free MCP server with eight tools that call the CLI with `--json`. Covered by test/mcp.test.js.
+- Windows: settings in %APPDATA%, Recycle Bin via PowerShell, PNG snapshots via the WinRT PDF API (src/raster.js), `rundll32`/`clip` for the open-link menu, hidden console for the background server, `paper.cmd` shim for the assistant. Linux snapshots use pdftoppm. None of this has run on a real Windows machine yet; CI (.github/workflows/test.yml) runs the tests on Windows, but the PowerShell snapshot and Recycle Bin paths are not covered by tests.
+- `paper open` in a terminal shows only the QR code plus **Open canvas** / **Copy link** instead of printing links.
+- README holds only install and basic use; everything technical moved to docs/reference.md.
