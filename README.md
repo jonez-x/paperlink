@@ -2,7 +2,7 @@
 
 A self-hosted notebook for handwriting, assignments and PDF worksheets. Start it from your laptop's CLI, write with Apple Pencil in your iPad browser, and keep every canvas as a `.paperlink` file wherever you like, for example next to your notes in an Obsidian vault. An optional assistant can read a page and leave annotations.
 
-**Status:** Early prototype. Pen, stroke eraser, undo/redo, zoom and panning, multiple pages, PDF worksheets and PDF export, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, device pairing with stable links and an interactive CLI are implemented. Live multi-device synchronization and AI integration are planned.
+**Status:** Early prototype. Pen, stroke eraser, undo/redo, zoom and panning, multiple pages, PDF worksheets and PDF export, live sync between devices, Light/Dark/System themes, automatic saving to canvas files, Obsidian notes with previews, device pairing with stable links and an interactive CLI are implemented. AI integration is planned.
 
 ## Install
 
@@ -54,9 +54,15 @@ Paperlink keeps a list of the canvases created or opened on this computer (`~/.c
 
 PDF pages keep their original look (white paper, dark ink) in both themes and are re-rendered sharply when you zoom. Rendering uses [pdf.js](https://github.com/mozilla/pdf.js) 5.4.624 (Apache-2.0), bundled in `public/vendor/pdfjs`, so Paperlink still works offline and needs no `npm install`. Obsidian previews show the PDF pages once the browser has opened the canvas, because the server cannot render PDFs itself.
 
+## Several devices at once
+
+Open the same canvas on the iPad and the Mac (or two iPads): strokes, erasing and new pages appear on the other devices as they happen. Each device sends its edits as small operations that the server merges, so writing on both at once never conflicts, and undo takes back only that device's own edits.
+
+When the connection drops, edits wait on the device (also across a reload) and go out automatically, in order and without duplicates, once the server is reachable again; the info icon shows how many are waiting. Open tabs reconnect on their own after `paper stop` / `paper start`.
+
 ## Exporting
 
-`paper export <canvas>` (or **Export PDF** in the menu's canvas list) writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and your handwriting is drawn on top as vector lines, so the worksheet's text stays sharp and searchable. Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.
+In the browser, **Export PDF** in the info popover downloads the PDF (on the iPad: save it to Files or share it). On the computer, `paper export <canvas>` (or **Export PDF** in the menu's canvas list) writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and your handwriting is drawn on top as vector lines, so the worksheet's text stays sharp and searchable. Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.
 
 ## Moving canvases
 

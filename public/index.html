@@ -169,8 +169,9 @@ main::after {
 </header>
 <div id="storage-info" popover>
 <span id="status" role="status">Local draft</span>
-<p id="connection-status" role="status">Manage canvases and storage through the CLI. Canvas edits save automatically. Connected local drafts are available to CLI import while this tab stays open.</p>
-<button id="retry-save">Retry pending save</button>
+<p id="connection-status" role="status">Open a canvas with a link or QR code from the CLI. Edits save automatically; drawings made before that can be imported with the CLI while this tab stays open.</p>
+<button id="retry-save" hidden>Retry pending save</button>
+<button id="export-pdf" hidden>Export PDF</button>
 </div>
 <nav aria-label="Drawing tools">
 <button id="pen" aria-label="Pen" title="Pen" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1 12-12a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/></svg></button>
@@ -228,7 +229,7 @@ function newId() {
 const PAGE_GAP = 40;
 const blankPage = () => ({ id: newId(), width: 900, height: 1273, strokes: [] }); // A4
 let pages = [blankPage()], past = [], future = [], active = null, tool = 'pen';
-let beforeGesture = null, previousPoint = null, gestureTool = null, drawing = null;
+let gestureOps = [], previousPoint = null, gestureTool = null, drawing = null;
 try {
   const draft = JSON.parse(localStorage.getItem('paperlink-draft') || '[]');
   if (Array.isArray(draft)) pages[0].strokes = draft;
@@ -248,9 +249,38 @@ function pageAt(y) {
   }
   return 0;
 }
-const snapshot = () => pages.map(page => ({ ...page, strokes: page.strokes.slice() }));
-function save() {
-  if (currentDocument) { saveToVault(); return; }
+// Edits are operations, the same ones the server merges from every device:
+// add/remove a stroke, add/remove a page. Each is idempotent, so replays and
+// edits from other devices converge; undo inverts only this device's edits.
+function applyOps(target, ops) {
+  for (const op of ops) {
+    if (op.type === 'addPage') { if (!target.some(page => page.id === op.page.id)) target.push({ id: op.page.id, width: op.page.width, height: op.page.height, strokes: [] }); continue; }
+    const index = target.findIndex(page => page.id === op.page);
+    if (index < 0) continue;
+    const page = target[index];
+    if (op.type === 'add' && !page.strokes.includes(op.stroke)) page.strokes.push(op.stroke);
+    if (op.type === 'remove') { const at = page.strokes.indexOf(op.stroke); if (at >= 0) page.strokes.splice(at, 1); }
+    if (op.type === 'removePage' && page.pdfPage === undefined && target.length > 1) target.splice(index, 1);
+  }
+  return target;
+}
+const invert = ops => ops.slice().reverse().map(op =>
+  op.type === 'add' ? { ...op, type: 'remove' } : op.type === 'remove' ? { ...op, type: 'add' }
+  : op.type === 'addPage' ? { type: 'removePage', page: op.page.id, size: { width: op.page.width, height: op.page.height } }
+  : { type: 'addPage', page: { id: op.page, ...op.size } });
+// Differences between two page lists as operations (for edits stored by older versions).
+function diffOps(from, to) {
+  const ops = [];
+  for (const page of to) {
+    const before = from.find(candidate => candidate.id === page.id);
+    if (!before) ops.push({ type: 'addPage', page: { id: page.id, width: page.width, height: page.height } });
+    for (const stroke of page.strokes) if (!before?.strokes.includes(stroke)) ops.push({ type: 'add', page: page.id, stroke });
+    for (const stroke of before?.strokes || []) if (!page.strokes.includes(stroke)) ops.push({ type: 'remove', page: page.id, stroke });
+  }
+  return ops;
+}
+function save(ops) {
+  if (currentDocument) { saveToVault(ops); return; }
   try { localStorage.setItem('paperlink-draft', JSON.stringify(pages[0].strokes)); status.textContent = 'Saved in this browser'; }
   catch { status.textContent = 'Save failed – keep this browser open'; }
 }
@@ -268,6 +298,7 @@ function render() {
   });
   pageLayer.replaceChildren(...groups);
   document.querySelector('#add-page').hidden = !currentDocument;
+  document.querySelector('#export-pdf').hidden = !currentDocument;
 }
 const inkOf = index => pageLayer.children[index]?.querySelector('.ink');
 
@@ -425,7 +456,11 @@ function eraseBetween(from, to) {
       }
       path.style.removeProperty('stroke-width');
     });
-    if (removed.size) { page.strokes = page.strokes.filter((stroke, strokeIndex) => !removed.has(strokeIndex)); changed = true; }
+    if (removed.size) {
+      for (const strokeIndex of removed) gestureOps.push({ type: 'remove', page: page.id, stroke: page.strokes[strokeIndex] });
+      page.strokes = page.strokes.filter((stroke, strokeIndex) => !removed.has(strokeIndex));
+      changed = true;
+    }
   });
   if (changed) render();
 }
@@ -455,7 +490,7 @@ sheet.addEventListener('pointerdown', event => {
   active = event.pointerId;
   hideToolbar();
   gestureTool = tool;
-  beforeGesture = snapshot();
+  gestureOps = [];
   previousPoint = point(event);
   if (gestureTool === 'eraser') {
     eraseBetween(previousPoint, previousPoint);
@@ -497,14 +532,19 @@ function finish(event) {
   if (touches.delete(event.pointerId)) { touchGesture = touches.size ? touchCenter() : null; return; }
   if (event.pointerId !== active) return;
   active = null;
+  if (drawing) {
+    const strokes = pages[drawing.index].strokes;
+    gestureOps.push({ type: 'add', page: pages[drawing.index].id, stroke: strokes[strokes.length - 1] });
+  }
   drawing = null;
   revealToolbarSoon();
-  if (JSON.stringify(pages) !== JSON.stringify(beforeGesture)) {
-    past.push(beforeGesture);
+  if (gestureOps.length) {
+    past.push(gestureOps);
     future = [];
-    save();
+    save(gestureOps);
   }
-  beforeGesture = null;
+  gestureOps = [];
+  applyIncoming();
 }
 sheet.addEventListener('pointerup', finish);
 sheet.addEventListener('pointercancel', finish);
@@ -521,25 +561,29 @@ for (const name of ['pen','eraser']) document.getElementById(name).onclick = () 
 };
 function restoreHistory(source, destination) {
   if (active !== null || !source.length) return;
-  destination.push(snapshot());
-  pages = source.pop();
+  const entry = source.pop();
+  const ops = source === past ? invert(entry) : entry;
+  applyOps(pages, ops);
+  destination.push(entry);
   render();
   applyView();
-  save();
+  save(ops);
 }
 document.querySelector('#undo').onclick = () => restoreHistory(past, future);
 document.querySelector('#redo').onclick = () => restoreHistory(future, past);
 document.querySelector('#fit').onclick = fit;
 document.querySelector('#add-page').onclick = () => {
   if (active !== null) return;
-  past.push(snapshot());
+  const page = blankPage();
+  const ops = [{ type: 'addPage', page: { id: page.id, width: page.width, height: page.height } }];
+  applyOps(pages, ops);
+  past.push(ops);
   future = [];
-  pages.push(blankPage());
   render();
   // Show the new page.
   view.y = pageTop(pages.length - 1) - 24 / view.scale;
   applyView();
-  save();
+  save(ops);
 };
 const themeModes = ['system', 'light', 'dark'];
 const themeIcons = {
@@ -571,9 +615,7 @@ let currentDocument = null;
 applyTheme(); render(); fit();
 
 const connectionStatus = document.querySelector('#connection-status');
-let pendingSave = null;
-let saving = false;
-let saveBlocked = false;
+let sending = false, saveBlocked = false, live = false, retryTimer = null;
 // A device pairs once with the one-time code from a QR link and keeps its
 // token in this browser, so plain canvas links (e.g. from Obsidian) work later.
 let deviceToken = '';
@@ -618,71 +660,159 @@ async function api(route, options = {}) {
   if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status });
   return result;
 }
-function recoveryKey() { return 'paperlink-pending-' + currentDocument.id; }
-function persistRecovery() {
-  localStorage.setItem(recoveryKey(), JSON.stringify({
-    document: currentDocument, pages, request: pendingSave
-  }));
-}
-function saveToVault() {
+// ── Saving and live updates ──
+// Edits wait in a queue that survives reloads and lost connections. Batches go
+// out in order with fixed operation IDs, so a retry never applies twice.
+let queue = [];
+const ownBatches = new Set();
+const queueKey = id => 'paperlink-queue-' + id;
+function persistQueue() {
   try {
-    persistRecovery();
-    status.textContent = 'Saved locally · waiting for vault';
-    if (!saveBlocked) void flushSave();
-  } catch {
-    status.textContent = 'Local save failed – keep this page open';
-    report(status.textContent, true);
+    if (queue.length) localStorage.setItem(queueKey(currentDocument.id), JSON.stringify(queue));
+    else localStorage.removeItem(queueKey(currentDocument.id));
+  } catch { report('This browser cannot keep unsent edits. Keep this page open until it is saved.', true); }
+}
+function showSaveState(error) {
+  const title = currentDocument?.title || '';
+  if (queue.length && saveBlocked) {
+    status.textContent = 'Offline · ' + queue.length + ' change' + (queue.length === 1 ? '' : 's') + ' kept on this device';
+    report((error?.message ? error.message + ' ' : '') + 'Your edits stay in this browser and are sent automatically when the connection returns.', true);
+  } else if (queue.length) {
+    status.textContent = 'Saving · ' + title;
+  } else {
+    status.textContent = 'Saved · ' + title + (live ? ' · live' : '');
+    report(live ? 'Saved. Changes from your other devices appear here as they happen.' : 'Saved.');
   }
+  document.querySelector('#info').title = status.textContent;
+  document.querySelector('#retry-save').hidden = !(queue.length && saveBlocked);
 }
-async function flushSave() {
-  if (saving || !currentDocument || saveBlocked) return;
-  saving = true;
+function saveToVault(ops) {
+  const batch = { operationId: operationId(), ops };
+  ownBatches.add(batch.operationId);
+  queue.push(batch);
+  persistQueue();
+  showSaveState();
+  void flushQueue();
+}
+async function flushQueue() {
+  if (sending || !currentDocument) return;
+  sending = true;
+  const id = currentDocument.id;
   try {
-    do {
-      pendingSave ||= { operationId: operationId(), revision: currentDocument.revision, pages: snapshot() };
-      persistRecovery();
-      const result = await api('/' + currentDocument.id, { method: 'PUT', body: JSON.stringify(pendingSave) });
-      const sent = pendingSave.pages;
-      currentDocument.revision = result.revision;
-      pendingSave = null;
-      if (JSON.stringify(pages) === JSON.stringify(sent)) {
-        localStorage.removeItem(recoveryKey());
-        status.textContent = 'Saved to vault · ' + currentDocument.title;
-        report('Saved to vault.');
-        break;
+    while (queue.length && currentDocument?.id === id) {
+      try {
+        await api('/' + id + '/ops', { method: 'POST', body: JSON.stringify(queue[0]) });
+      } catch (error) {
+        // A batch the server rejects as invalid would block every later edit.
+        if (error.status !== 400) throw error;
+        report('An edit could not be saved and was skipped: ' + error.message, true);
       }
-      persistRecovery();
-    } while (true);
+      queue.shift();
+      persistQueue();
+    }
+    saveBlocked = false;
+    showSaveState();
+    wakeStream?.();
   } catch (error) {
     saveBlocked = true;
-    status.textContent = error.status === 409 ? 'Save conflict · edits kept on this device' : 'Save pending · retry in storage information';
-    report(error.message + ' Your edits remain in this browser. Retry in storage information. Conflicting edits can be copied with CLI canvas import.', true);
-    document.querySelector('#info').title = status.textContent;
-  } finally { saving = false; }
+    showSaveState(error);
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => void flushQueue(), 4000);
+  } finally { sending = false; }
 }
+
+// Other devices' edits arrive over a streamed response (EventSource cannot
+// send the device token). They wait while the pen is down.
+let incoming = [], stream = null, wakeStream = null;
+function applyIncoming() {
+  if (active !== null || !incoming.length) return;
+  applyOps(pages, incoming.splice(0));
+  render();
+}
+function handleEvent(event) {
+  if (event.live) { live = true; if (!queue.length) showSaveState(); return; }
+  if (event.reload) { void reloadDocument(); return; }
+  if (event.revision <= currentDocument.revision) return;
+  currentDocument.revision = event.revision;
+  if (ownBatches.has(event.operationId)) return;
+  incoming.push(...event.ops);
+  applyIncoming();
+}
+async function listen(id) {
+  stream?.abort();
+  const controller = stream = new AbortController();
+  let delay = 1000;
+  while (!controller.signal.aborted && currentDocument?.id === id) {
+    try {
+      const response = await fetch('/api/canvases/' + id + '/events?since=' + currentDocument.revision, { headers: { Authorization: 'Bearer ' + deviceToken }, signal: controller.signal });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Connection failed.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        for (let end; (end = buffer.indexOf('\n\n')) >= 0;) {
+          const line = buffer.slice(0, end).split('\n').find(text => text.startsWith('data: '));
+          buffer = buffer.slice(end + 2);
+          if (line) handleEvent(JSON.parse(line.slice(6)));
+          delay = 1000;
+        }
+      }
+    } catch { if (controller.signal.aborted) return; }
+    live = false;
+    if (!queue.length) showSaveState();
+    // Back off, but reconnect at once when a save shows the server is back.
+    await new Promise(resolve => { wakeStream = resolve; setTimeout(resolve, delay); });
+    wakeStream = null;
+    delay = Math.min(delay * 2, 15000);
+  }
+}
+// After a whole-document change elsewhere: take the server's state and keep
+// this device's unsent edits on top.
+async function reloadDocument() {
+  if (!currentDocument) return;
+  const document = await api('/' + currentDocument.id);
+  if (active !== null) { setTimeout(() => void reloadDocument(), 300); return; }
+  pages = applyOps(document.pages, queue.flatMap(batch => batch.ops));
+  incoming = [];
+  currentDocument.revision = document.revision;
+  render();
+}
+
 function adopt(document, contents) {
   currentDocument = { id: document.id, title: document.title, revision: document.revision };
   loadPdf(document).catch(error => report('The PDF could not be loaded: ' + error.message, true));
   try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
   pages = contents;
-  past = []; future = []; pendingSave = null; saveBlocked = false;
+  past = []; future = []; incoming = []; saveBlocked = false; live = false;
+  try { queue = JSON.parse(localStorage.getItem(queueKey(document.id)) || '[]'); } catch { queue = []; }
+  for (const batch of queue) ownBatches.add(batch.operationId);
+  applyOps(pages, queue.flatMap(batch => batch.ops));
   render();
   fit();
   status.textContent = 'Opened · ' + document.title;
 }
-async function openCanvas(id) {
+// `extraStrokes`: strokes drawn on page 1 before a draft import, not yet on the server.
+async function openCanvas(id, { extraStrokes = [] } = {}) {
   const document = await api('/' + id);
-  const recovery = localStorage.getItem('paperlink-pending-' + document.id);
-  if (recovery) {
-    const saved = JSON.parse(recovery);
-    // Records from before multi-page documents hold only the first page's strokes.
-    adopt({ ...document, revision: saved.document.revision }, saved.pages || [{ ...document.pages[0], strokes: saved.strokes }]);
-    pendingSave = saved.request?.pages ? saved.request : null;
-    report('Recovered local edits. Saving them to the vault.');
-    await flushSave();
-  } else {
-    adopt(document, document.pages);
+  adopt(document, document.pages);
+  const ops = extraStrokes.filter(stroke => !document.pages[0].strokes.includes(stroke)).map(stroke => ({ type: 'add', page: document.pages[0].id, stroke }));
+  // Unsaved edits stored by earlier versions hold whole pages.
+  const legacy = localStorage.getItem('paperlink-pending-' + id);
+  if (legacy) {
+    try {
+      const saved = JSON.parse(legacy);
+      ops.push(...diffOps(document.pages, saved.pages || [{ ...document.pages[0], strokes: saved.strokes }]));
+      report('Recovered local edits. Saving them now.');
+    } catch {}
+    localStorage.removeItem('paperlink-pending-' + id);
   }
+  if (ops.length) { applyOps(pages, ops); render(); saveToVault(ops); }
+  else if (queue.length) void flushQueue();
+  else showSaveState();
+  void listen(id);
 }
 function action(id, callback) {
   document.getElementById(id).onclick = async () => {
@@ -690,7 +820,28 @@ function action(id, callback) {
     catch (error) { report(error.message, true); }
   };
 }
-action('retry-save', async () => { saveBlocked = false; await flushSave(); });
+action('retry-save', async () => { clearTimeout(retryTimer); await flushQueue(); });
+// Downloads the canvas as a PDF (on the iPad: save to Files or share it).
+action('export-pdf', async () => {
+  if (!currentDocument) return;
+  const button = document.querySelector('#export-pdf');
+  button.disabled = true;
+  button.textContent = 'Exporting…';
+  try {
+    if (queue.length) await flushQueue();
+    const response = await fetch('/api/canvases/' + currentDocument.id + '/export.pdf', { headers: { Authorization: 'Bearer ' + deviceToken } });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Export failed.');
+    const url = URL.createObjectURL(await response.blob());
+    const link = Object.assign(document.createElement('a'), { href: url, download: currentDocument.title.replace(/[\\/:*?"<>|]/g, ' ') + '.pdf' });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Export PDF';
+  }
+});
 let previouslyOpen = canvasFromLink;
 try { previouslyOpen ||= sessionStorage.getItem('paperlink-open-canvas'); } catch {}
 let loading = Boolean(previouslyOpen);
@@ -709,14 +860,12 @@ try {
 } catch { browserDraftId = operationId(); }
 let polling = false;
 async function publishDraft() {
-  if (!deviceToken || loading || polling || active !== null || (currentDocument && !saveBlocked)) return;
+  if (!deviceToken || loading || polling || active !== null || currentDocument) return;
   polling = true;
   try {
     const result = await api('/drafts/' + browserDraftId, { method: 'PUT', body: JSON.stringify({ strokes: pages[0].strokes.slice() }) });
-    if (result.document && active === null && !saving) {
-      const contents = [{ ...pages[0], strokes: pages[0].strokes.slice() }];
-      adopt(result.document, contents);
-      saveToVault();
+    if (result.document && active === null) {
+      await openCanvas(result.document.id, { extraStrokes: pages[0].strokes.slice() });
       browserDraftId = operationId();
       try { sessionStorage.setItem('paperlink-browser-draft', browserDraftId); } catch {}
     }
@@ -725,7 +874,7 @@ async function publishDraft() {
 }
 setInterval(publishDraft, 2000);
 void publishDraft();
-window.addEventListener('online', () => { if (currentDocument) { saveBlocked = false; void flushSave(); } });
+window.addEventListener('online', () => { if (currentDocument) { clearTimeout(retryTimer); void flushQueue(); wakeStream?.(); } });
 
 </script>
 </html>

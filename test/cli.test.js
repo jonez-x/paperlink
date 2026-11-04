@@ -253,6 +253,12 @@ test('PDF worksheets: pages from the PDF, served to paired devices, moved and de
     assert.equal((await upload(document.pages[0].id, Buffer.from('<svg/>'))).status, 400);
     assert.equal((await upload('unknown-page', jpeg)).status, 404);
     assert.deepEqual((await (await fetch(base + '/api/canvases/' + created.id, { headers: auth })).json()).cachedBackgrounds, [document.pages[0].id]);
+    // Export for download, e.g. from the iPad.
+    const exported = await fetch(base + '/api/canvases/' + created.id + '/export.pdf', { headers: auth });
+    assert.equal(exported.headers.get('content-type'), 'application/pdf');
+    assert.match(exported.headers.get('content-disposition'), /attachment; filename="Sheet 3\.pdf"/);
+    assert.ok(Buffer.from(await exported.arrayBuffer()).subarray(0, 5).equals(Buffer.from('%PDF-')));
+    assert.equal((await fetch(base + '/api/canvases/' + created.id + '/export.pdf')).status, 401);
     // A browser cannot drop PDF pages.
     const drop = await fetch(base + '/api/canvases/' + created.id, { method: 'PUT', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: 0, operationId: 'drop', pages: [document.pages[1]] }) });
     assert.equal(drop.status, 400);
@@ -265,6 +271,84 @@ test('PDF worksheets: pages from the PDF, served to paired devices, moved and de
     assert.deepEqual((await readdir(path.join(root, 'Vault', 'Archive'))).sort(), ['Sheet 3.md', 'Sheet 3.paperlink', 'Sheet 3.pdf']);
     assert.equal((await paper('delete', moved.id, '--yes'))[0].trashed.length, 4);
     assert.deepEqual(await readdir(path.join(root, 'Vault', 'Archive')), []);
+  } finally {
+    await paper('stop').catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('live sync: operations from several devices merge, replay safely and stream to open tabs', async () => {
+  const { root, paper } = await sandbox();
+  const port = '18880';
+  try {
+    await paper('config', 'set', 'port', port);
+    const canvas = await paper('new', 'Live');
+    await paper('start');
+    const base = 'http://127.0.0.1:' + port;
+    const device = async () => {
+      const code = (await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1];
+      return (await (await fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json()).token;
+    };
+    const [iPad, mac] = [await device(), await device()];
+    const headers = token => ({ Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' });
+    const send = (token, operationId, ops) => fetch(base + '/api/canvases/' + canvas.id + '/ops', { method: 'POST', headers: headers(token), body: JSON.stringify({ operationId, ops }) });
+    const read = async token => (await (await fetch(base + '/api/canvases/' + canvas.id, { headers: headers(token) })).json());
+    const page = (await read(iPad)).pages[0].id;
+    const a = 'M 1 1 l 0.01 0 L 2 2', b = 'M 5 5 l 0.01 0 L 6 6';
+
+    // The Mac listens while the iPad writes.
+    const events = [];
+    const controller = new AbortController();
+    const listening = fetch(base + '/api/canvases/' + canvas.id + '/events?since=0', { headers: headers(mac), signal: controller.signal }).then(async response => {
+      const reader = response.body.getReader();
+      let text = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        text += new TextDecoder().decode(value);
+        for (let end; (end = text.indexOf('\n\n')) >= 0; text = text.slice(end + 2)) events.push(JSON.parse(text.slice(6, end)));
+      }
+    }).catch(() => {});
+    const waitFor = async check => { for (let i = 0; i < 50 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 20)); assert.ok(check()); };
+    await waitFor(() => events.some(event => event.live));
+
+    assert.equal((await send(iPad, 'ipad-1', [{ type: 'add', page, stroke: a }])).status, 200);
+    // Both devices edit "at once" from the same revision: no conflict, both kept.
+    assert.equal((await send(mac, 'mac-1', [{ type: 'add', page, stroke: b }])).status, 200);
+    // A retried batch is not applied twice; a reused ID with other content is refused.
+    assert.equal((await (await send(iPad, 'ipad-1', [{ type: 'add', page, stroke: a }])).json()).revision, 1);
+    assert.equal((await send(iPad, 'ipad-1', [{ type: 'remove', page, stroke: a }])).status, 409);
+    assert.equal((await send(iPad, 'bad', [{ type: 'add', page, stroke: '<script>' }])).status, 400);
+    assert.deepEqual((await read(mac)).pages[0].strokes, [a, b]);
+    await waitFor(() => events.filter(event => event.ops).length === 2);
+    assert.deepEqual(events.filter(event => event.ops).map(event => [event.revision, event.operationId]), [[1, 'ipad-1'], [2, 'mac-1']]);
+
+    // Pages: added by one device, strokes on it from another, PDF-free pages removable.
+    assert.equal((await send(mac, 'mac-2', [{ type: 'addPage', page: { id: 'page-2', width: 900, height: 1273 } }, { type: 'add', page: 'page-2', stroke: a }])).status, 200);
+    assert.equal((await send(iPad, 'ipad-2', [{ type: 'remove', page, stroke: b }, { type: 'remove', page, stroke: 'M 9 9 l 0.01 0' }])).status, 200);
+    let document = await read(iPad);
+    assert.deepEqual(document.pages.map(entry => entry.strokes), [[a], [a]]);
+    assert.equal((await send(iPad, 'ipad-3', [{ type: 'removePage', page: 'page-2' }])).status, 200);
+    assert.equal((await read(iPad)).pages.length, 1);
+
+    // A tab reconnecting with an old revision catches up from the recent history,
+    // one that is too far behind (or after a server restart) is told to reload.
+    const catchUp = async since => {
+      const response = await fetch(base + '/api/canvases/' + canvas.id + '/events?since=' + since, { headers: headers(iPad) });
+      const reader = response.body.getReader();
+      let text = '';
+      while (!text.includes('"live":true')) text += new TextDecoder().decode((await reader.read()).value);
+      await reader.cancel();
+      return text.split('\n\n').filter(Boolean).map(chunk => JSON.parse(chunk.slice(6)));
+    };
+    assert.deepEqual((await catchUp(3)).map(event => event.revision), [4, 5, 5]);
+    controller.abort();
+    await listening;
+    await paper('stop');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await paper('start');
+    const afterRestart = await catchUp(2);
+    assert.equal(afterRestart[0].reload, true);
   } finally {
     await paper('stop').catch(() => {});
     await rm(root, { recursive: true, force: true });

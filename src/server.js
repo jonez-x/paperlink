@@ -1,15 +1,16 @@
 import http from 'node:http';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { createCanvas, EXTENSION, isCanvasFile, obsidianVault } from './documents.js';
-import { readCanvas, saveCanvas, validateStrokes } from './store.js';
+import { readCanvas, saveCanvas, saveOperations, validateStrokes } from './store.js';
 import { acquireFolderLock } from './lock.js';
 import { DraftStore } from './drafts.js';
 import { backgroundDirectory, backgroundPath, findNote, writeObsidianFiles, writePreview } from './preview.js';
 import { validPdfName } from './pdf.js';
+import { exportPdf } from './export.js';
 import { loadRegistry, relocate } from './registry.js';
 import { findMoved, followNote, moveCanvas } from './move.js';
 import { stateDirectory } from './config.js';
@@ -73,6 +74,37 @@ export async function serve({ port, lan, obsidian = true }) {
     const result = queue.then(action);
     queue = result.catch(() => {});
     return result;
+  }
+
+  // Live updates: every open tab of a canvas holds an event stream. Each saved
+  // batch of operations is sent to all of them; the recent ones are kept, so a
+  // reconnecting tab catches up from its last revision instead of reloading.
+  const streams = new Map(); // canvas ID → Set of responses
+  const history = new Map(); // canvas ID → [{ revision, operationId, ops }]
+  function broadcast(id, event) {
+    if (event.ops) {
+      const log = history.get(id) || [];
+      log.push(event);
+      if (log.length > 300) log.shift();
+      history.set(id, log);
+    } else history.delete(id); // a whole-document change: tabs must reload
+    for (const response of streams.get(id) || []) response.write('data: ' + JSON.stringify(event) + '\n\n');
+  }
+  async function subscribe(req, res, id) {
+    const file = await locate(id);
+    const since = Number(new URL(req.url, 'http://local').searchParams.get('since'));
+    const { revision } = await serialize(() => readCanvas(file, id));
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+    const missed = (history.get(id) || []).filter(event => event.revision > since);
+    const complete = !Number.isInteger(since) || since >= revision || (missed.length && missed[0].revision === since + 1 && missed.at(-1).revision === revision);
+    if (!complete) res.write('data: ' + JSON.stringify({ revision, reload: true }) + '\n\n');
+    else for (const event of missed) res.write('data: ' + JSON.stringify(event) + '\n\n');
+    res.write('data: ' + JSON.stringify({ revision, live: true }) + '\n\n');
+    const set = streams.get(id) || new Set();
+    set.add(res);
+    streams.set(id, set);
+    const ping = setInterval(() => res.write(': ping\n\n'), 20000);
+    req.on('close', () => { clearInterval(ping); set.delete(res); });
   }
 
   // Obsidian previews follow saves after a short pause, so a stream of strokes
@@ -177,7 +209,7 @@ export async function serve({ port, lan, obsidian = true }) {
       case '/cli/status':
         return json(res, 200, { running: true, pid: process.pid, port, lan, obsidian, startedAt, links: pairingLinks(), drafts: drafts.list().filter(draft => draft.strokes !== null).length });
       case '/cli/stop':
-        json(res, 200, { stopping: true });
+        json(res, 200, { stopping: true, pid: process.pid });
         setImmediate(stop);
         return;
       case '/cli/drafts':
@@ -293,6 +325,37 @@ export async function serve({ port, lan, obsidian = true }) {
         void schedulePreview(id, file);
         return json(res, 200, { stored: pageId });
       }
+      const exportMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/export\.pdf$/.exec(req.url);
+      if (exportMatch && req.method === 'GET') {
+        const [, id] = exportMatch;
+        const file = await locate(id);
+        const temporary = path.join(stateDirectory(), 'export-' + randomBytes(8).toString('hex') + '.pdf');
+        await mkdir(stateDirectory(), { recursive: true });
+        try {
+          const document = await serialize(() => readCanvas(file, id));
+          await serialize(() => exportPdf(file, id, temporary));
+          const content = await readFile(temporary);
+          const name = document.title.replace(/[^\x20-\x7e]|["\\]/g, '_') + '.pdf';
+          res.writeHead(200, { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store',
+            'Content-Disposition': 'attachment; filename="' + name + '"; filename*=UTF-8\'\'' + encodeURIComponent(document.title + '.pdf') });
+          res.end(content);
+        } finally { await unlink(temporary).catch(() => {}); }
+        return;
+      }
+      const eventsMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/events(?:\?since=-?\d+)?$/.exec(req.url);
+      if (eventsMatch && req.method === 'GET') return await subscribe(req, res, eventsMatch[1]);
+      const opsMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/ops$/.exec(req.url);
+      if (opsMatch && req.method === 'POST') {
+        const [, id] = opsMatch;
+        const input = await body(req);
+        const file = await locate(id);
+        const saved = await serialize(() => saveOperations(file, id, input));
+        if (!saved.duplicate) {
+          broadcast(id, { revision: saved.revision, operationId: input.operationId, ops: input.ops });
+          void schedulePreview(id, file);
+        }
+        return json(res, 200, { revision: saved.revision });
+      }
       const match = /^\/api\/canvases\/([a-f0-9-]{36})$/.exec(req.url);
       if (match && req.method === 'GET') {
         const file = await locate(match[1]);
@@ -305,6 +368,7 @@ export async function serve({ port, lan, obsidian = true }) {
         const input = await body(req);
         const file = await locate(match[1]);
         const saved = await serialize(() => saveCanvas(file, match[1], input));
+        broadcast(match[1], { revision: saved.revision, reload: true });
         void schedulePreview(match[1], file);
         return json(res, 200, saved);
       }
@@ -334,8 +398,11 @@ export async function serve({ port, lan, obsidian = true }) {
     if (stopping) return;
     stopping = true;
     server.close(() => { flushPreviews().then(() => lock.release()).then(() => process.exit(0)); });
-    // Browser tabs keep connections alive; do not wait for them.
-    setTimeout(() => server.closeAllConnections(), 500).unref();
+    // Live tabs hold their streams open; end them now, so a restart right after
+    // `paper stop` finds the port and lock free. Tabs reconnect on their own.
+    for (const set of streams.values()) for (const response of set) response.end();
+    server.closeIdleConnections();
+    setTimeout(() => server.closeAllConnections(), 300).unref();
   }
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);

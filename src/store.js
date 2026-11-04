@@ -66,27 +66,27 @@ function mergePages(document, request) {
   return pages;
 }
 
-export async function saveCanvas(file, id, request) {
-  if (!Number.isInteger(request.revision) || typeof request.operationId !== 'string' ||
-      !/^[a-zA-Z0-9-]{1,80}$/.test(request.operationId)) {
+function checkOperationId(request) {
+  if (typeof request.operationId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(request.operationId)) {
     throw Object.assign(new Error('Invalid save request.'), { status: 400 });
   }
-  const document = await readCanvas(file, id);
+}
+
+// An operation ID seen before returns its earlier result, so retries after a
+// lost response never apply twice; reusing an ID for other content is refused.
+function receiptFor(document, request) {
   const hash = createHash('sha256').update(JSON.stringify(request)).digest('hex');
   const receipt = (document.receipts || []).find(r => r.id === request.operationId);
-  if (receipt) {
-    if (receipt.hash !== hash) throw Object.assign(new Error('Operation ID reused.'), { status: 409 });
-    return { revision: receipt.revision };
-  }
-  if (document.revision !== request.revision) {
-    throw Object.assign(new Error('This canvas changed elsewhere. Your local changes are retained.'), { status: 409 });
-  }
-  document.pages = mergePages(document, request);
+  if (receipt && receipt.hash !== hash) throw Object.assign(new Error('Operation ID reused.'), { status: 409 });
+  return { hash, receipt };
+}
+
+async function commit(file, document, operationId, hash) {
   document.version = 2;
   document.revision++;
   document.updatedAt = new Date().toISOString();
-  document.receipts = [...(document.receipts || []), { id: request.operationId, hash, revision: document.revision }].slice(-100);
-  const temporary = file + '.' + request.operationId + '.tmp';
+  document.receipts = [...(document.receipts || []), { id: operationId, hash, revision: document.revision }].slice(-200);
+  const temporary = file + '.' + operationId + '.tmp';
   try {
     const handle = await open(temporary, 'wx');
     try { await handle.writeFile(JSON.stringify(document, null, 2) + '\n'); await handle.sync(); }
@@ -94,4 +94,61 @@ export async function saveCanvas(file, id, request) {
     await rename(temporary, file);
   } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   return { revision: document.revision };
+}
+
+// Whole-document save with a revision check (single-device clients and imports).
+export async function saveCanvas(file, id, request) {
+  checkOperationId(request);
+  if (!Number.isInteger(request.revision)) throw Object.assign(new Error('Invalid save request.'), { status: 400 });
+  const document = await readCanvas(file, id);
+  const { hash, receipt } = receiptFor(document, request);
+  if (receipt) return { revision: receipt.revision };
+  if (document.revision !== request.revision) {
+    throw Object.assign(new Error('This canvas changed elsewhere. Your local changes are retained.'), { status: 409 });
+  }
+  document.pages = mergePages(document, request);
+  return commit(file, document, request.operationId, hash);
+}
+
+// Edits as operations, so several devices can write at once without conflicts:
+//   { type: 'add', page, stroke }       adds a stroke unless it is there
+//   { type: 'remove', page, stroke }    removes it if it is there
+//   { type: 'addPage', page: { id, width, height } }
+//   { type: 'removePage', page }        blank pages only; PDF pages stay
+// Each one is idempotent, so replays and concurrent edits converge.
+export function validateOperations(ops) {
+  if (!Array.isArray(ops) || !ops.length || ops.length > 5000) throw Object.assign(new Error('Invalid operations.'), { status: 400 });
+  for (const op of ops) {
+    const valid = ['add', 'remove'].includes(op?.type) ? PAGE_ID.test(op.page ?? '') && typeof op.stroke === 'string'
+      : op?.type === 'addPage' ? PAGE_ID.test(op.page?.id ?? '') && dimension(op.page.width) && dimension(op.page.height)
+      : op?.type === 'removePage' ? PAGE_ID.test(op.page ?? '') : false;
+    if (!valid) throw Object.assign(new Error('Invalid operations.'), { status: 400 });
+    if (op.type === 'add') validateStrokes([op.stroke]);
+  }
+}
+
+export function applyOperations(pages, ops) {
+  for (const op of ops) {
+    if (op.type === 'addPage') {
+      if (!pages.some(page => page.id === op.page.id) && pages.length < 500) pages.push({ id: op.page.id, width: op.page.width, height: op.page.height, strokes: [] });
+      continue;
+    }
+    const index = pages.findIndex(page => page.id === op.page);
+    if (index < 0) continue; // the page was removed elsewhere
+    const page = pages[index];
+    if (op.type === 'add' && !page.strokes.includes(op.stroke)) page.strokes.push(op.stroke);
+    if (op.type === 'remove') { const at = page.strokes.indexOf(op.stroke); if (at >= 0) page.strokes.splice(at, 1); }
+    if (op.type === 'removePage' && page.pdfPage === undefined && pages.length > 1) pages.splice(index, 1);
+  }
+  return pages;
+}
+
+export async function saveOperations(file, id, request) {
+  checkOperationId(request);
+  validateOperations(request.ops);
+  const document = await readCanvas(file, id);
+  const { hash, receipt } = receiptFor(document, request);
+  if (receipt) return { revision: receipt.revision, duplicate: true };
+  applyOperations(document.pages, request.ops);
+  return commit(file, document, request.operationId, hash);
 }

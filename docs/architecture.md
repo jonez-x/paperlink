@@ -1,6 +1,6 @@
 # Architecture, CLI and AI integration
 
-The browser, CLI and optional MCP adapter share the local server's document operations. HTTP provides documents, snapshots and commands. WebSocket distributes changes to connected browsers. The UI renders strokes locally and submits completed strokes with unique operation IDs.
+The browser, CLI and optional MCP adapter share the local server's document operations. HTTP provides documents, snapshots and commands. A streamed HTTP response per open canvas (server-sent events read with fetch, so the device token can be sent) distributes changes to connected browsers. The UI renders strokes locally and submits completed strokes with unique operation IDs.
 
 ## Documents and Obsidian
 

@@ -339,6 +339,9 @@ async function cmdStart(ctx) {
 async function cmdStop(ctx) {
   // `anyLibrary` lets servers of the earlier library-based version stop too.
   const result = await callServer(ctx, 'stop', { anyLibrary: true });
+  // Return only once the process is gone (lock released), so `paper stop && paper start` works.
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  for (let waited = 0; result?.pid && waited < 5000 && alive(result.pid); waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
   emit(ctx, { running: false, stopped: Boolean(result) }, () => result ? ok('Server stopped') : '  ' + c.muted('Paperlink was not running.'));
 }
 

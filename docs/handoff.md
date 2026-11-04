@@ -116,14 +116,23 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - `paper export <canvas> [--output FILE|FOLDER]`, default `<Name> (annotated).pdf` next to the canvas, overwritten on re-export; menu: All canvases › Export PDF.
 - Verified: npm test (20 tests, new: rotation/crop mapping, export read back with pdf.js: page count, displayed sizes incl. rotated page, ink operators on every page, title, original text still extractable). Visual check of an export with a rotated page.
 
+## Live sync and browser export (2026-11-04, Claude Code)
+
+- Edits are operations: `add`/`remove` (page ID + stroke string, the string is the stroke's identity), `addPage` (id, size), `removePage` (blank pages only). Each is idempotent. POST /api/canvases/:id/ops `{operationId, ops}` applies a batch in the write queue without a revision check (src/store.js `saveOperations`, receipts keep the last 200 batches), so concurrent devices never conflict. The whole-document PUT stays for imports and old tabs and makes open tabs reload.
+- GET /api/canvases/:id/events?since=R streams `data: {revision, operationId, ops}` lines (fetch + ReadableStream, because EventSource cannot send the device token). The server keeps the last 300 batches per canvas; a tab reconnecting within them catches up, otherwise (or after a restart) it gets `{reload: true}`. `{live: true}` marks the switch to live; pings every 20 s.
+- Browser: undo/redo store operation lists and apply their inverse, so undo only takes back this tab's edits. Edits go into a queue persisted in localStorage (`paperlink-queue-<id>`), sent in order with fixed IDs, retried every 4 s; invalid batches (400) are skipped with a message. Remote batches are held back while the pen is down. After a reload event the server state is taken and unsent edits re-applied. Old `paperlink-pending-<id>` records are converted with a diff. Draft import now opens the canvas and adds strokes drawn after the last draft snapshot.
+- `paper stop` ends live streams at once and waits until the server process has exited, so `paper stop && paper start` works with open tabs.
+- Browser export: GET /api/canvases/:id/export.pdf (paired devices) renders with src/export.js into a temp file and returns it as a download; "Export PDF" button in the info popover. "Retry pending save" only shows while edits are waiting.
+- Verified: npm test (21 tests, new: concurrent batches from two devices, replay and reused IDs, page operations, catch-up vs reload after restart, export download and auth). In Chrome with two tabs on one canvas: strokes appear in the other tab, undo removes only the tab's own stroke, an edit made while the server was down is kept (also across a page reload), sent after restart and received by the other tab; export download returns a PDF. Not tested on the iPad. Two tabs of the same browser on the same canvas share one queue key.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
 
 ## Current limitations
 
-- Browser-only drafts are per device/origin. Vault saves work. Live device sync, PDFs, MCP and assistant triggers remain pending.
-- No pressure-aware ink, lasso or highlighter. Export only from the CLI, not from the browser.
+- Browser-only drafts are per device/origin. MCP and assistant triggers remain pending.
+- No pressure-aware ink, lasso or highlighter.
 - Undo history is session-only. localStorage data is only minimally validated.
 - Eraser hit testing and redraw iterate all paths. Optimize when document sizes require it.
 - LAN API access uses paired device tokens over HTTP and assumes a trusted LAN. HTTPS and production hardening remain pending.
