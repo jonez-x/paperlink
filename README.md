@@ -71,6 +71,8 @@ paper annotate "Sheet 4" --page 2 --at 520,320 --text "Check the sign here." --r
 paper annotate "Sheet 4" --remove <id> | --clear
 ```
 
+**Ask from the page.** With `paper config set assistant claude` (and a restart) the toolbar gets an ask button: mark a region on the iPad, optionally type a question, and Claude Code runs on the computer to answer with notes next to it. It is off by default. The browser only sends page, region and question; the command is fixed in the config, runs without a shell, and Claude may only use `paper inspect`, `paper snapshot`, `paper annotate` and read the snapshot. One request per canvas runs at a time (5-minute limit); its output goes to `~/.config/paperlink/assistant.log`. Other assistants: `paper config set assistant '["my-agent","--flag","{prompt}"]'` runs that command with the prompt as an argument.
+
 Notes live on a separate layer: they never change the handwriting, appear live on every open device, can be hidden with the note button in the toolbar and removed one by one (undo brings them back). A note made with `--revision` older than the canvas is marked as written for an earlier version.
 
 ## Exporting

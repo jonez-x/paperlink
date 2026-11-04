@@ -133,6 +133,14 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - Fix: an event stream without `since` now starts live instead of asking for a reload.
 - Verified: npm test (22 tests, new: notes offline and live, stale marking, region snapshot size, PNG snapshot, remove by prefix and clear). In Chrome: note on a PDF page, a note added from the CLI appears live, × removes, undo restores, layer toggle.
 
+## Request feedback from the page (2026-11-04, Claude Code)
+
+- Config `assistant`: null (default, off), `'claude'`, or a custom JSON argument list containing `"{prompt}"` (`paper config set assistant claude|off|'[…]'`, also in Settings). Restart needed.
+- src/assistant.js: prompt with canvas ID, revision, page, region (page units) and the quoted question; it tells the assistant to `paper snapshot … --region … --output ~/.config/paperlink/snapshots/<id8>-feedback.png`, read it, and answer only with `paper annotate … --revision R --author Claude`. Claude runs as `claude -p <prompt> --allowedTools "Bash(paper inspect *) Bash(paper snapshot *) Bash(paper annotate *) Read"` with cwd ~/.config/paperlink, no shell, PATH prefixed with a `paper` shim (~/.config/paperlink/bin/paper → this checkout), PAPERLINK_PORT set, output appended to assistant.log, killed after 5 minutes.
+- Server: POST /api/canvases/:id/feedback `{page, region?, question?}` for paired devices; 409 when no assistant is set, 429 while one runs for the canvas, validation of page/region/question (≤1000 chars). Broadcasts `{assistant: started|done|failed, message}` to open tabs (not kept in history). GET canvas includes `assistant: true|false`.
+- Browser: ask tool (speech-bubble icon, only when an assistant is set): drag marks a region (dashed orange), a tap asks about the whole page; a form takes an optional question; status shows progress and errors; notes arrive live.
+- Verified: npm test (23 tests, new: full flow with a stand-in assistant command that answers through the shim: off by default, validation, 202, 429 while running, started/done events, note text with question and region). In Chrome with the stand-in: mark region, type question, Ask, note appears next to the region. The real `claude` preset was not run (it would use the user's account); the prompt was reviewed.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.

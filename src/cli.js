@@ -17,6 +17,7 @@ import { forget, loadRegistry, relocate, remember } from './registry.js';
 import { deleteCanvas, findMoved, moveCanvas } from './move.js';
 import { canvasLink, loadDevices, saveDevices } from './devices.js';
 import { defaultExportPath, exportPdf } from './export.js';
+import { validAssistant } from './assistant.js';
 import { readCanvas, saveOperations, validAnnotation } from './store.js';
 import { writeObsidianFiles } from './preview.js';
 import { renderQr } from './qr.js';
@@ -293,7 +294,7 @@ async function obsidianFiles(ctx, file, document) {
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
-const RESTART_KEYS = ['lan', 'port', 'obsidian'];
+const RESTART_KEYS = ['lan', 'port', 'obsidian', 'assistant'];
 
 async function cmdConfig(ctx, positional) {
   const [action, key, ...rest] = positional;
@@ -302,21 +303,30 @@ async function cmdConfig(ctx, positional) {
       c.muted('obsidian  ') + ctx.config.obsidian + c.muted('  · notes for canvases inside a vault'),
       c.muted('lan       ') + ctx.config.lan + c.muted('  · iPad and other devices may connect'),
       c.muted('port      ') + ctx.config.port,
+      c.muted('assistant ') + (ctx.config.assistant ? JSON.stringify(ctx.config.assistant) : 'off') + c.muted('  · answers "Request feedback" from a page'),
       '', c.muted(configPath())
     ], { title: 'Config' }));
   }
-  if (action !== 'set' || !key || !rest.length) throw new CliError('Use `paper config`, or `paper config set <obsidian|lan|port> <value>`.');
+  if (action !== 'set' || !key || !rest.length) throw new CliError('Use `paper config`, or `paper config set <obsidian|lan|port|assistant> <value>`.');
   const value = rest.join(' ');
   const parseBoolean = text => { if (/^(true|on|yes|1)$/i.test(text)) return true; if (/^(false|off|no|0)$/i.test(text)) return false; throw new CliError(key + ' must be true or false.'); };
-  const update = { obsidian: parseBoolean, lan: parseBoolean, port: validPort }[key];
-  if (!update) throw new CliError('Unknown setting ' + key + '. Use obsidian, lan or port.');
+  // assistant: claude, off, or a JSON argument list with "{prompt}", e.g. ["my-agent","--ask","{prompt}"].
+  const parseAssistant = text => {
+    if (/^(off|none|false|no)$/i.test(text)) return null;
+    let setting = text;
+    if (text.trim().startsWith('[')) { try { setting = JSON.parse(text); } catch { throw new CliError('The custom assistant must be a JSON list such as ["my-agent","{prompt}"].'); } }
+    if (!validAssistant(setting)) throw new CliError('Use `claude`, `off`, or a JSON list containing "{prompt}".');
+    return setting;
+  };
+  const update = { obsidian: parseBoolean, lan: parseBoolean, port: validPort, assistant: parseAssistant }[key];
+  if (!update) throw new CliError('Unknown setting ' + key + '. Use obsidian, lan, port or assistant.');
   const config = await saveConfig({ ...ctx.config, [key]: update(value) });
   emit(ctx, { ...config, configPath: configPath() }, () => ok(key + ' = ' + config[key] + (RESTART_KEYS.includes(key) ? c.muted('  · restart the server to apply') : '')) +
     (key === 'obsidian' && config.obsidian ? '\n  ' + c.muted('Run `paper preview` to add notes for existing canvases.') : ''));
 }
 
 async function cmdServe(ctx) {
-  const server = await serve({ port: ctx.port, lan: ctx.lan, obsidian: ctx.obsidian });
+  const server = await serve({ port: ctx.port, lan: ctx.lan, obsidian: ctx.obsidian, assistant: ctx.config.assistant });
   if (!process.stdout.isTTY || process.env.PAPERLINK_BACKGROUND) {
     console.log('Paperlink → ' + server.links[0]);
     for (const link of server.links.slice(1)) console.log('Device link → ' + link);
@@ -795,6 +805,7 @@ async function settings(ctx, status) {
         { label: 'Obsidian notes', value: 'obsidian', hint: config.obsidian ? 'on · for canvases inside a vault' : 'off' },
         { label: 'iPad & network access', value: 'lan', hint: config.lan ? 'on' : 'off · this computer only' },
         { label: 'Port', value: 'port', hint: String(config.port) },
+        { label: 'Assistant', value: 'assistant', hint: config.assistant === 'claude' ? 'Claude Code answers "Ask"' : config.assistant ? 'custom command' : 'off' },
         { label: 'Paired devices', value: 'devices', hint: 'list and unpair' },
         { separator: '' },
         { label: 'Back', value: 'back' }
@@ -810,12 +821,17 @@ async function settings(ctx, status) {
     }
     let value;
     if (choice === 'obsidian') value = await ui.confirm({ message: 'Add a note and preview to canvases inside an Obsidian vault?', initial: config.obsidian });
+    if (choice === 'assistant') {
+      const enable = await ui.confirm({ message: 'Let Claude Code answer "Ask" from a page with notes? It runs on this computer and only gets Paperlink commands.', initial: Boolean(config.assistant) });
+      if (enable !== null) value = enable ? (Array.isArray(config.assistant) ? config.assistant : 'claude') : null;
+      if (enable === null) continue;
+    }
     if (choice === 'lan') value = await ui.confirm({ message: 'Allow your iPad and other devices on this Wi-Fi to connect?', initial: config.lan });
     if (choice === 'port') {
       const answer = await ui.input({ message: 'Port', initial: String(config.port), validate: text => { try { validPort(text); return ''; } catch (error) { return error.message; } } });
       if (answer) value = validPort(answer);
     }
-    if (value === null || value === undefined) continue;
+    if (value === undefined || (value === null && choice !== 'assistant')) continue;
     config = await saveConfig({ ...config, [choice]: value });
     if (choice === 'obsidian' && value) {
       const count = (await knownCanvases()).filter(canvas => !canvas.missing).length;
@@ -871,7 +887,7 @@ function helpText() {
     '',
     '  ' + c.bold('Settings'),
     command('config', 'show settings'),
-    command('config set <key> <value>', 'obsidian, lan, port'),
+    command('config set <key> <value>', 'obsidian, lan, port, assistant (claude|off)'),
     '',
     '  ' + c.bold('Options'),
     command('--port <n>', 'server port (default from config, 8080)'),

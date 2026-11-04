@@ -164,6 +164,12 @@ main::after {
 .note small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 .note button { position: absolute; top: 3px; right: 3px; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; }
 #notes-toggle span { font-size: 11px; font-weight: 600; }
+#sheet .selection { fill: #ff702818; stroke: var(--accent); stroke-dasharray: 6 4; }
+#ask { position: fixed; z-index: 3; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); box-shadow: 0 6px 24px #00000030; }
+#ask textarea { box-sizing: border-box; width: 100%; min-height: 72px; margin: 8px 0 10px; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--ink); font: inherit; resize: vertical; }
+#ask .actions { display: flex; gap: 8px; justify-content: flex-end; }
+#ask label { color: var(--muted); font-size: 13px; }
+#ask-send { background: var(--accent); color: #17120b; border-color: var(--accent); }
 #info[data-error=true] { color: #df5429; background: #df542918; }
 #connection-status[data-error=true] { color: #df5429; }
 </style>
@@ -183,6 +189,7 @@ main::after {
 </div>
 <nav aria-label="Drawing tools">
 <button id="pen" aria-label="Pen" title="Pen" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1 12-12a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/></svg></button>
+<button id="ask-tool" aria-label="Ask the assistant about a region" title="Ask the assistant about a region" aria-pressed="false" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4Z"/><path d="M10 9.5a2 2 0 1 1 2.5 1.9c-.4.2-.5.5-.5.9M12 14v.3"/></svg></button>
 <button id="eraser" aria-label="Eraser" title="Eraser" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m13 4 7 7a2 2 0 0 1 0 3l-6 6H8l-5-5a2 2 0 0 1 0-3l7-8a2 2 0 0 1 3 0ZM7 9l9 9M8 20h13"/></svg></button>
 <span class="separator" aria-hidden="true"></span>
 <button id="undo" aria-label="Undo" title="Undo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12" transform="translate(0 -2)"/></svg></button>
@@ -192,6 +199,11 @@ main::after {
 <button id="notes-toggle" aria-label="Hide assistant notes" title="Hide assistant notes" aria-pressed="true" hidden><span>0</span></button>
 <button id="add-page" aria-label="Add page" title="Add page" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6ZM12 10v8M8 14h8"/></svg></button>
 </nav>
+<form id="ask" hidden>
+<label for="ask-question">Ask about the marked area (optional)</label>
+<textarea id="ask-question" maxlength="1000" placeholder="e.g. Is this step right?"></textarea>
+<div class="actions"><button type="button" id="ask-cancel">Cancel</button><button type="submit" id="ask-send">Ask</button></div>
+</form>
 <main><div id="notes" aria-label="Assistant notes"></div><svg id="sheet" aria-label="Writing surface">
 <defs>
 <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 28 0 L 0 0 0 28"/></pattern>
@@ -238,7 +250,7 @@ function newId() {
 const PAGE_GAP = 40;
 const blankPage = () => ({ id: newId(), width: 900, height: 1273, strokes: [] }); // A4
 let pages = [blankPage()], past = [], future = [], active = null, tool = 'pen';
-let gestureOps = [], previousPoint = null, gestureTool = null, drawing = null;
+let gestureOps = [], previousPoint = null, gestureTool = null, drawing = null, selection = null;
 try {
   const draft = JSON.parse(localStorage.getItem('paperlink-draft') || '[]');
   if (Array.isArray(draft)) pages[0].strokes = draft;
@@ -314,6 +326,7 @@ function render() {
   renderNotes();
   document.querySelector('#add-page').hidden = !currentDocument;
   document.querySelector('#export-pdf').hidden = !currentDocument;
+  document.querySelector('#ask-tool').hidden = !currentDocument?.assistant;
 }
 const inkOf = index => pageLayer.children[index]?.querySelector('.ink');
 
@@ -395,6 +408,43 @@ notesToggle.onclick = () => {
   const label = shown ? 'Hide assistant notes' : 'Show assistant notes';
   notesToggle.setAttribute('aria-label', label);
   notesToggle.title = label;
+};
+
+// ── Asking the assistant about a marked region ──
+// A tap (no real drag) asks about the whole page under it.
+const askForm = document.querySelector('#ask');
+let askTarget = null;
+function openAsk() {
+  const { start, end = start, rect } = selection;
+  const index = pageAt(start.y), page = pages[index], top = pageTop(index);
+  const clamp = (value, max) => Math.min(max, Math.max(0, value));
+  const x1 = clamp(Math.min(start.x, end.x), page.width), x2 = clamp(Math.max(start.x, end.x), page.width);
+  const y1 = clamp(Math.min(start.y, end.y) - top, page.height), y2 = clamp(Math.max(start.y, end.y) - top, page.height);
+  const region = x2 - x1 > 20 && y2 - y1 > 20 ? { x: x1, y: y1, width: x2 - x1, height: y2 - y1 } : null;
+  if (!region) rect.remove();
+  askTarget = { page: index + 1, region, rect };
+  askForm.hidden = false;
+  document.querySelector('#ask-question').focus();
+}
+function closeAsk() {
+  askForm.hidden = true;
+  askTarget?.rect.remove();
+  askTarget = null;
+  selection = null;
+  document.querySelector('#ask-question').value = '';
+}
+document.querySelector('#ask-cancel').onclick = closeAsk;
+askForm.onsubmit = async event => {
+  event.preventDefault();
+  if (!askTarget || !currentDocument) return closeAsk();
+  const request = { page: askTarget.page, region: askTarget.region, question: document.querySelector('#ask-question').value.trim() || undefined };
+  closeAsk();
+  selectTool('pen');
+  try {
+    await api('/' + currentDocument.id + '/feedback', { method: 'POST', body: JSON.stringify(request) });
+    status.textContent = 'The assistant is looking at page ' + request.page + '…';
+    report('The assistant answers with notes on the page. This can take a minute.');
+  } catch (error) { report(error.message, true); document.querySelector('#storage-info').showPopover(); }
 };
 
 // ── PDF pages: rendered by pdf.js into images under the ink ──
@@ -558,7 +608,10 @@ sheet.addEventListener('pointerdown', event => {
   gestureTool = tool;
   gestureOps = [];
   previousPoint = point(event);
-  if (gestureTool === 'eraser') {
+  if (gestureTool === 'ask') {
+    selection = { start: previousPoint, rect: element('rect', { class: 'selection', 'vector-effect': 'non-scaling-stroke' }) };
+    pageLayer.after(selection.rect);
+  } else if (gestureTool === 'eraser') {
     eraseBetween(previousPoint, previousPoint);
   } else {
     const index = pageAt(previousPoint.y), top = pageTop(index);
@@ -584,7 +637,11 @@ sheet.addEventListener('pointermove', event => {
   const samples = event.getCoalescedEvents?.();
   for (const sample of samples?.length ? samples : [event]) {
     const p = point(sample);
-    if (gestureTool === 'eraser') {
+    if (gestureTool === 'ask') {
+      const { start } = selection;
+      for (const [key, value] of Object.entries({ x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), width: Math.abs(p.x - start.x), height: Math.abs(p.y - start.y) })) selection.rect.setAttribute(key, value);
+      selection.end = p;
+    } else if (gestureTool === 'eraser') {
       eraseBetween(previousPoint, p);
     } else {
       const strokes = pages[drawing.index].strokes;
@@ -604,6 +661,7 @@ function finish(event) {
   }
   drawing = null;
   revealToolbarSoon();
+  if (gestureTool === 'ask') openAsk();
   if (gestureOps.length) {
     past.push(gestureOps);
     future = [];
@@ -621,10 +679,12 @@ sheet.addEventListener('wheel', event => {
   if (event.ctrlKey || event.metaKey) zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * 0.01));
   else panBy(-event.deltaX, -event.deltaY);
 }, { passive: false });
-for (const name of ['pen','eraser']) document.getElementById(name).onclick = () => {
+const tools = { pen: 'pen', eraser: 'eraser', 'ask-tool': 'ask' };
+function selectTool(name) {
   tool = name;
-  for (const id of ['pen','eraser']) document.getElementById(id).setAttribute('aria-pressed', id === name);
-};
+  for (const [id, value] of Object.entries(tools)) document.getElementById(id).setAttribute('aria-pressed', value === name);
+}
+for (const [id, value] of Object.entries(tools)) document.getElementById(id).onclick = () => selectTool(value);
 function restoreHistory(source, destination) {
   if (active !== null || !source.length) return;
   const entry = source.pop();
@@ -797,6 +857,12 @@ function applyIncoming() {
 }
 function handleEvent(event) {
   if (event.live) { live = true; if (!queue.length) showSaveState(); return; }
+  if (event.assistant) {
+    if (event.assistant === 'started') status.textContent = 'The assistant is looking…';
+    else if (event.assistant === 'failed') { report(event.message || 'The assistant failed.', true); showSaveState(); }
+    else showSaveState();
+    return;
+  }
   if (event.reload) { void reloadDocument(); return; }
   if (event.revision <= currentDocument.revision) return;
   currentDocument.revision = event.revision;
@@ -849,7 +915,7 @@ async function reloadDocument() {
 }
 
 function adopt(document, contents) {
-  currentDocument = { id: document.id, title: document.title, revision: document.revision };
+  currentDocument = { id: document.id, title: document.title, revision: document.revision, assistant: Boolean(document.assistant) };
   loadPdf(document).catch(error => report('The PDF could not be loaded: ' + error.message, true));
   try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
   pages = contents;

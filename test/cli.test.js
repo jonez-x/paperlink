@@ -413,3 +413,61 @@ test('assistant commands: inspect, snapshots of a region, notes that appear live
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('request feedback: a configured assistant runs with page and region, answers with live notes', async () => {
+  const { root, paper } = await sandbox();
+  const port = '18882';
+  try {
+    await paper('config', 'set', 'port', port);
+    const canvas = await paper('new', 'Feedback');
+    // A stand-in assistant: reads the prompt and answers through the `paper` shim on its PATH.
+    const agent = path.join(root, 'agent.mjs');
+    await writeFile(agent, [
+      "import { execFileSync } from 'node:child_process';",
+      "const prompt = process.argv[2];",
+      "const id = prompt.match(/ID ([a-f0-9-]{36})/)[1];",
+      "const question = (prompt.match(/\"\"\"(.*)\"\"\"/) || [])[1] || 'none';",
+      "const region = (prompt.match(/--region ([0-9,]+)/) || [])[1] || 'page';",
+      "execFileSync('paper', ['annotate', id, '--text', question + ' @ ' + region, '--author', 'Stand-in', '--json']);"
+    ].join('\n'));
+    await paper('start');
+    const base = 'http://127.0.0.1:' + port;
+    const code = (await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1];
+    const { token } = await (await fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json();
+    const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+    const ask = data => fetch(base + '/api/canvases/' + canvas.id + '/feedback', { method: 'POST', headers, body: JSON.stringify(data) });
+
+    // Off by default.
+    assert.equal((await ask({ page: 1 })).status, 409);
+    assert.equal((await (await fetch(base + '/api/canvases/' + canvas.id, { headers })).json()).assistant, false);
+    await paper('config', 'set', 'assistant', JSON.stringify([process.execPath, agent, '{prompt}']));
+    await paper('stop');
+    await paper('start');
+    assert.equal((await (await fetch(base + '/api/canvases/' + canvas.id, { headers })).json()).assistant, true);
+    assert.equal((await ask({ page: 2 })).status, 400);
+    assert.equal((await ask({ page: 1, region: { x: 0, y: 0, width: -5, height: 10 } })).status, 400);
+
+    const response = await fetch(base + '/api/canvases/' + canvas.id + '/events', { headers });
+    const reader = response.body.getReader();
+    const events = [];
+    let text = '';
+    const until = async check => {
+      while (!check()) {
+        text += new TextDecoder().decode((await reader.read()).value);
+        for (let end; (end = text.indexOf('\n\n')) >= 0; text = text.slice(end + 2)) events.push(JSON.parse(text.slice(6, end)));
+      }
+    };
+    assert.equal((await ask({ page: 1, region: { x: 100, y: 200, width: 300, height: 150 }, question: 'Is step 2 right?' })).status, 202);
+    assert.equal((await ask({ page: 1 })).status, 429, 'one run per canvas at a time');
+    await until(() => events.some(event => event.assistant === 'done' || event.assistant === 'failed'));
+    await reader.cancel();
+    assert.deepEqual(events.filter(event => event.assistant).map(event => event.assistant), ['started', 'done']);
+    const note = events.find(event => event.ops)?.ops[0].annotation;
+    assert.equal(note.text, 'Is step 2 right? @ 100,200,300,150');
+    assert.equal(note.author, 'Stand-in');
+    assert.match(await paper('config', 'set', 'assistant', 'off').then(config => String(config.assistant)), /null/);
+  } finally {
+    await paper('stop').catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});

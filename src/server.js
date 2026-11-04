@@ -11,6 +11,7 @@ import { DraftStore } from './drafts.js';
 import { backgroundDirectory, backgroundPath, findNote, writeObsidianFiles, writePreview } from './preview.js';
 import { validPdfName } from './pdf.js';
 import { exportPdf } from './export.js';
+import { feedbackPrompt, runAssistant, validAssistant } from './assistant.js';
 import { loadRegistry, relocate } from './registry.js';
 import { findMoved, followNote, moveCanvas } from './move.js';
 import { stateDirectory } from './config.js';
@@ -29,7 +30,7 @@ export function lanAddresses() {
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 // One server per user serves every canvas the local CLI has created or opened.
-export async function serve({ port, lan, obsidian = true }) {
+export async function serve({ port, lan, obsidian = true, assistant = null }) {
   const drafts = new DraftStore();
   const lock = await acquireFolderLock(stateDirectory());
   const startedAt = new Date().toISOString();
@@ -80,9 +81,11 @@ export async function serve({ port, lan, obsidian = true }) {
   // batch of operations is sent to all of them; the recent ones are kept, so a
   // reconnecting tab catches up from its last revision instead of reloading.
   const streams = new Map(); // canvas ID → Set of responses
+  const assistantRuns = new Set();
   const history = new Map(); // canvas ID → [{ revision, operationId, ops }]
   function broadcast(id, event) {
-    if (event.ops) {
+    if (event.assistant) { /* status only, not part of the history */ }
+    else if (event.ops) {
       const log = history.get(id) || [];
       log.push(event);
       if (log.length > 300) log.shift();
@@ -208,7 +211,7 @@ export async function serve({ port, lan, obsidian = true }) {
     const input = await body(req);
     switch (req.url) {
       case '/cli/status':
-        return json(res, 200, { running: true, pid: process.pid, port, lan, obsidian, startedAt, links: pairingLinks(), drafts: drafts.list().filter(draft => draft.strokes !== null).length });
+        return json(res, 200, { running: true, pid: process.pid, port, lan, obsidian, assistant: Boolean(assistant), startedAt, links: pairingLinks(), drafts: drafts.list().filter(draft => draft.strokes !== null).length });
       case '/cli/stop':
         json(res, 200, { stopping: true, pid: process.pid });
         setImmediate(stop);
@@ -353,6 +356,29 @@ export async function serve({ port, lan, obsidian = true }) {
         } finally { await unlink(temporary).catch(() => {}); }
         return;
       }
+      // "Request feedback": one assistant run per canvas at a time.
+      const feedbackMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/feedback$/.exec(req.url);
+      if (feedbackMatch && req.method === 'POST') {
+        const [, id] = feedbackMatch;
+        if (!assistant || !validAssistant(assistant)) throw httpError(409, 'No assistant is set up. On the computer run `paper config set assistant claude` and restart Paperlink.');
+        if (assistantRuns.has(id)) throw httpError(429, 'The assistant is still working on this canvas.');
+        const input = await body(req);
+        const file = await locate(id);
+        const document = await serialize(() => readCanvas(file, id));
+        const page = input.page;
+        if (!Number.isInteger(page) || page < 1 || page > document.pages.length) throw httpError(400, 'Invalid page.');
+        const region = input.region ?? null;
+        if (region !== null && !['x', 'y', 'width', 'height'].every(key => Number.isFinite(region[key]) && Math.abs(region[key]) < 20000) || (region && (region.width <= 0 || region.height <= 0))) throw httpError(400, 'Invalid region.');
+        if (input.question !== undefined && (typeof input.question !== 'string' || input.question.length > 1000)) throw httpError(400, 'Questions are limited to 1000 characters.');
+        assistantRuns.add(id);
+        broadcast(id, { assistant: 'started' });
+        await runAssistant({
+          setting: assistant, port,
+          prompt: feedbackPrompt({ document, page, region, question: input.question?.trim() || '' }),
+          onExit: ({ ok, message }) => { assistantRuns.delete(id); broadcast(id, { assistant: ok ? 'done' : 'failed', message }); }
+        }).catch(error => { assistantRuns.delete(id); throw error; });
+        return json(res, 202, { started: true });
+      }
       const eventsMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/events(?:\?since=-?\d+)?$/.exec(req.url);
       if (eventsMatch && req.method === 'GET') return await subscribe(req, res, eventsMatch[1]);
       const opsMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/ops$/.exec(req.url);
@@ -373,7 +399,7 @@ export async function serve({ port, lan, obsidian = true }) {
         const document = await serialize(() => readCanvas(file, match[1]));
         // Tells the browser which page images the preview still lacks.
         const cached = await readdir(backgroundDirectory(match[1])).catch(() => []);
-        return json(res, 200, { ...document, receipts: undefined, cachedBackgrounds: cached.map(name => name.replace(/\.jpg$/, '')) });
+        return json(res, 200, { ...document, receipts: undefined, cachedBackgrounds: cached.map(name => name.replace(/\.jpg$/, '')), assistant: Boolean(assistant) });
       }
       if (match && req.method === 'PUT') {
         const input = await body(req);
