@@ -10,9 +10,9 @@ const viewBox = svg => svg.match(/viewBox="([^"]+)"/)[1].split(' ').map(Number);
 
 test('preview keeps the page width and fits the content height', () => {
   assert.deepEqual(viewBox(renderPreview(canvas([]))), [0, 0, 900, 240], 'empty canvas');
-  assert.deepEqual(viewBox(renderPreview(canvas(['M 100 500 l 0.01 0 L 200 600']))), [0, 0, 900, 640]);
+  assert.deepEqual(viewBox(renderPreview(canvas(['M 100 500 l 0.01 0 L 200 600']))), [0, 0, 900, 641.5]); // the content plus half the stroke width
   // Writing left of the page (wide screens) widens the preview instead of being cut off.
-  assert.deepEqual(viewBox(renderPreview(canvas(['M -400 20 l 0.01 0 L 950 30']))), [-440, -20, 1430, 240]);
+  assert.deepEqual(viewBox(renderPreview(canvas(['M -400 20 l 0.01 0 L 950 30']))), [-441.5, -21.5, 1433, 240]);
   assert.match(renderPreview(canvas([], 'A <b> & "c"')), /<title>A &lt;b&gt; &amp; &quot;c&quot;<\/title>/);
 });
 

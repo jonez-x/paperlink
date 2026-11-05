@@ -102,6 +102,31 @@ button:hover { background: var(--line); }
 button[aria-pressed=true]:hover { background: #ff8b40; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 nav button:disabled { opacity: 0.35; background: transparent; cursor: default; }
+nav { max-width: calc(100vw - 16px); overflow-x: auto; scrollbar-width: none; }
+/* Options of the active tool: tap it again. */
+.panel { position: absolute; z-index: 3; display: flex; flex-wrap: nowrap; overflow-x: auto; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: 0 4px 18px #00000024; }
+.panel[hidden] { display: none; }
+#tool-options { top: 136px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); }
+.panel .group { display: flex; gap: 4px; align-items: center; }
+.panel .group + .group { padding-left: 8px; border-left: 1px solid var(--line); }
+.panel button { min-height: 36px; padding: 6px 10px; border: 1px solid transparent; border-radius: 4px; background: transparent; font-size: 13px; }
+.panel button[aria-pressed=true] { border-color: var(--accent); background: #ff702822; color: var(--ink); }
+.panel .swatch { width: 36px; padding: 0; display: grid; place-items: center; }
+.panel .swatch span { width: 22px; height: 22px; border-radius: 50%; background: var(--color, var(--ink)); box-shadow: inset 0 0 0 1px #0002; }
+.panel .size span { display: block; width: 22px; height: var(--size); border-radius: 4px; background: var(--ink); }
+#pick-actions { transform: translateX(-50%); }
+#text-editor { position: absolute; z-index: 1; margin: 0; padding: 0; border: 1px dashed var(--accent); outline: none; background: transparent; color: var(--ink); font-family: Arial, Helvetica, sans-serif; line-height: 1.25; white-space: pre; overflow: hidden; resize: none; user-select: text; -webkit-user-select: text; }
+#text-editor.on-pdf { color: #24231f; }
+#overview { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; background: #0006; }
+#overview[hidden] { display: none; }
+#overview > div { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 16px; border-radius: 8px; background: var(--bg); box-shadow: 0 8px 30px #0005; }
+#overview .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-weight: 600; }
+#overview .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px; }
+#overview figure { position: relative; margin: 0; text-align: center; color: var(--muted); font-size: 12px; }
+#overview figure > button { display: block; width: 100%; padding: 0; border: 2px solid transparent; border-radius: 4px; background: transparent; }
+#overview figure > button[aria-current=true] { border-color: var(--accent); }
+#overview .thumb { display: block; width: 100%; height: auto; }
+#overview .remove { position: absolute; top: 4px; right: 4px; min-height: 28px; width: 28px; padding: 0; border-radius: 50%; }
 main {
   position: relative;
   width: 100%;
@@ -142,13 +167,23 @@ main::after {
   border: 1px solid var(--line);
   touch-action: none;
 }
-#sheet .page { fill: var(--paper); stroke: var(--line); }
+:is(#sheet, .thumb) .page { fill: var(--paper); stroke: var(--line); }
 #sheet .grid-line { fill: none; stroke: var(--grid); }
 #sheet .mat-line { fill: none; stroke: var(--line); }
-#sheet .ink path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+:is(#sheet, .thumb) .ink path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 /* PDF pages keep their original look in both themes, so ink stays dark on them. */
-#sheet .pdf-page .page { fill: #ffffff; }
-#sheet .pdf-page .ink path { stroke: #24231f; }
+:is(#sheet, .thumb) .pdf-page .page { fill: #ffffff; }
+:is(#sheet, .thumb) .pdf-page .ink path { stroke: #24231f; }
+/* Pressure strokes are filled outlines; text uses the theme ink unless coloured. */
+:is(#sheet, .thumb) .marks path, #live path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+:is(#sheet, .thumb) path.filled, #live path.filled { fill: var(--ink); stroke: none; }
+:is(#sheet, .thumb) .pdf-page path.filled { fill: #24231f; stroke: none; }
+:is(#sheet, .thumb) .ink text { fill: var(--ink); font-family: Arial, Helvetica, sans-serif; white-space: pre; }
+:is(#sheet, .thumb) .pdf-page .ink text { fill: #24231f; }
+:is(#sheet, .thumb, #live) .highlight { opacity: 0.35; }
+#sheet .lasso { fill: #ff702810; stroke: var(--accent); stroke-dasharray: 5 4; }
+#sheet .pick-box { fill: none; stroke: var(--accent); stroke-dasharray: 6 4; }
+#sheet .is-editing { visibility: hidden; }
 @media (max-width: 600px) {
   header { padding: 0 16px; gap: 12px; }
 
@@ -192,9 +227,13 @@ main::after {
 <button id="export-pdf" hidden>Export PDF</button>
 </div>
 <nav aria-label="Drawing tools">
-<button id="pen" aria-label="Pen" title="Pen" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1 12-12a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/></svg></button>
+<button id="pen" aria-label="Pen" title="Pen (tap again for colour and width)" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1 12-12a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/></svg></button>
+<button id="marker" aria-label="Highlighter" title="Highlighter (tap again for colours)" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-8 8H8v-4Z"/><path d="m8 18-3 2M4 21h9"/></svg></button>
 <button id="ask-tool" aria-label="Ask the assistant about a region" title="Ask the assistant about a region" aria-pressed="false" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4Z"/><path d="M10 9.5a2 2 0 1 1 2.5 1.9c-.4.2-.5.5-.5.9M12 14v.3"/></svg></button>
-<button id="eraser" aria-label="Eraser" title="Eraser" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m13 4 7 7a2 2 0 0 1 0 3l-6 6H8l-5-5a2 2 0 0 1 0-3l7-8a2 2 0 0 1 3 0ZM7 9l9 9M8 20h13"/></svg></button>
+<button id="eraser" aria-label="Eraser" title="Eraser (tap again: whole strokes or precise)" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m13 4 7 7a2 2 0 0 1 0 3l-6 6H8l-5-5a2 2 0 0 1 0-3l7-8a2 2 0 0 1 3 0ZM7 9l9 9M8 20h13"/></svg></button>
+<button id="lasso" aria-label="Lasso: select, move, recolour" title="Lasso: select, move, recolour" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4c5 0 8 2.5 8 5.5S16.5 15 12 15 4 12.5 4 9.5 7 4 12 4Z" stroke-dasharray="2.5 2.5"/><path d="M8 14c-1.5 2-.5 4.5 2 5.5"/></svg></button>
+<button id="shape-tool" aria-label="Shapes" title="Shapes (tap again to choose)" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="9" height="9"/><circle cx="16" cy="8" r="5"/></svg></button>
+<button id="text-tool" aria-label="Text" title="Text" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7V4h14v3M12 4v16M9 20h6"/></svg></button>
 <span class="separator" aria-hidden="true"></span>
 <button id="undo" aria-label="Undo" title="Undo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12" transform="translate(0 -2)"/></svg></button>
 <button id="redo" aria-label="Redo" title="Redo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12" transform="translate(0 -2)"/></svg></button>
@@ -202,6 +241,7 @@ main::after {
 <button id="fit" aria-label="Fit page" title="Fit page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
 <button id="notes-toggle" aria-label="Hide assistant notes" title="Hide assistant notes" aria-pressed="true" hidden><span>0</span></button>
 <button id="add-page" aria-label="Add page" title="Add page" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6ZM12 10v8M8 14h8"/></svg></button>
+<button id="pages-button" aria-label="All pages" title="All pages" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg></button>
 <div id="page-nav" hidden>
 <span class="separator" aria-hidden="true"></span>
 <button id="previous-page" aria-label="Previous page" title="Previous page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button>
@@ -209,20 +249,25 @@ main::after {
 <button id="next-page" aria-label="Next page" title="Next page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
 </div>
 </nav>
+<div id="tool-options" class="panel" hidden></div>
+<div id="overview" hidden><div role="dialog" aria-label="All pages"><div class="head"><span>Pages</span><button id="overview-close" aria-label="Close">×</button></div><div class="grid"></div></div></div>
 <form id="ask" hidden>
 <label for="ask-question">Ask about the marked area (optional)</label>
 <textarea id="ask-question" maxlength="1000" placeholder="e.g. Is this step right?"></textarea>
 <div class="actions"><button type="button" id="ask-cancel">Cancel</button><button type="submit" id="ask-send">Ask</button></div>
 </form>
-<main><div id="notes" aria-label="Assistant notes"></div><svg id="sheet" aria-label="Writing surface">
+<main><div id="notes" aria-label="Assistant notes"></div><textarea id="text-editor" hidden spellcheck="false" aria-label="Text"></textarea><div id="pick-actions" class="panel" hidden></div><svg id="sheet" aria-label="Writing surface">
 <defs>
 <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 28 0 L 0 0 0 28"/></pattern>
 <pattern id="mat" width="240" height="240" patternUnits="userSpaceOnUse"><path class="mat-line" d="M 240 0 L 0 0 0 240"/></pattern>
 </defs>
 <rect id="mat-area" fill="url(#mat)"/>
 <g id="pages"></g>
+<g id="live"></g>
+<g id="overlay"></g>
 </svg></main>
-<script>
+<script type="module">
+import { eraseFrom, formatStroke, inLasso, parseStroke, shapePoints, strokeBounds, strokeDistance, strokePath, textLines, touches, translateStroke, restyleStroke } from '/ink.js';
 const SVG = 'http://www.w3.org/2000/svg';
 const sheet = document.querySelector('#sheet');
 const pageLayer = document.querySelector('#pages');
@@ -294,7 +339,7 @@ function applyOps(target, ops, notes = annotations) {
     const page = target[index];
     if (op.type === 'add' && !page.strokes.includes(op.stroke)) page.strokes.push(op.stroke);
     if (op.type === 'remove') { const at = page.strokes.indexOf(op.stroke); if (at >= 0) page.strokes.splice(at, 1); }
-    if (op.type === 'removePage' && page.pdfPage === undefined && target.length > 1) target.splice(index, 1);
+    if (op.type === 'removePage' && page.pdfPage === undefined && !page.strokes.length && target.length > 1) target.splice(index, 1);
   }
   return target;
 }
@@ -327,19 +372,58 @@ function render() {
     group.append(element('rect', { class: 'page', width: page.width, height: page.height, 'vector-effect': 'non-scaling-stroke' }));
     if (pdf) group.append(element('image', { 'data-page': page.id, width: page.width, height: page.height, preserveAspectRatio: 'none', ...(backgrounds.get(page.id) && { href: backgrounds.get(page.id).url }) }));
     else group.append(element('rect', { width: page.width, height: page.height, fill: 'url(#grid)' }));
-    const ink = element('g', { class: 'ink' });
-    for (const stroke of page.strokes) ink.append(element('path', { d: stroke }));
-    group.append(ink);
+    const marks = element('g', { class: 'marks' }), ink = element('g', { class: 'ink' });
+    strokeElements[index] = new Map();
+    group.append(marks, ink);
+    for (const stroke of page.strokes) appendStroke(index, stroke, group);
     return group;
   });
   pageLayer.replaceChildren(...groups);
+  refreshPicked();
   renderNotes();
   document.querySelector('#add-page').hidden = !currentDocument;
   document.querySelector('#export-pdf').hidden = !currentDocument;
   document.querySelector('#ask-tool').hidden = !currentDocument?.assistant;
+  document.querySelector('#pages-button').hidden = pages.length < 2 && !currentDocument;
   updatePageNav();
 }
-const inkOf = index => pageLayer.children[index]?.querySelector('.ink');
+
+// ── Ink: strings parsed once, highlighters drawn below the ink ──
+const parsedStrokes = new Map();
+function parsed(stroke) {
+  let result = parsedStrokes.get(stroke);
+  if (result === undefined) {
+    if (parsedStrokes.size > 50000) parsedStrokes.clear();
+    parsedStrokes.set(stroke, result = parseStroke(stroke));
+  }
+  return result;
+}
+function drawInk(ink) {
+  if (ink.kind === 'text') {
+    const text = element('text', { 'font-size': ink.width });
+    for (const line of textLines(ink)) {
+      const span = element('tspan', { x: line.x, y: line.y });
+      span.textContent = line.text;
+      text.append(span);
+    }
+    if (ink.color) text.style.fill = ink.color;
+    return text;
+  }
+  const path = element('path', { d: strokePath(ink) });
+  if (ink.kind === 'pressure') path.classList.add('filled');
+  else path.style.strokeWidth = ink.width;
+  if (ink.highlighter) path.classList.add('highlight');
+  if (ink.color) path.style[ink.kind === 'pressure' ? 'fill' : 'stroke'] = ink.color;
+  return path;
+}
+let strokeElements = []; // per page: stroke → element
+function appendStroke(index, stroke, group = pageLayer.children[index]) {
+  const ink = parsed(stroke);
+  if (!ink || !group) return;
+  const drawn = drawInk(ink);
+  strokeElements[index].set(stroke, drawn);
+  group.querySelector(ink.highlighter ? '.marks' : '.ink').append(drawn);
+}
 
 // ── View: pan and zoom in world units, independent of the stored strokes ──
 let view = null; // { x, y, scale }: scale = screen pixels per world unit
@@ -386,6 +470,8 @@ function applyView() {
   for (const line of sheet.querySelectorAll('.grid-line, .mat-line')) line.setAttribute('stroke-width', 1 / view.scale);
   scheduleBackgrounds();
   positionNotes();
+  positionPicked();
+  positionText();
   updatePageNav();
 }
 
@@ -583,38 +669,218 @@ for (const type of ['touchstart', 'touchmove']) {
 function point(event) {
   return new DOMPoint(event.clientX, event.clientY).matrixTransform(sheet.getScreenCTM().inverse());
 }
-// Test a forgiving, screen-sized swept area instead of requiring an exact path tap.
+// ── Tools and their settings (kept per browser) ──
+const PEN_COLORS = [null, '#2f6fde', '#e0453a', '#2f9e5b', '#8a4fd1', '#ff7028'];
+const MARKER_COLORS = ['#ffd23f', '#7ee081', '#ff8fc8', '#7cc7ff'];
+const settings = { penColor: null, penWidth: 3, pressure: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke' };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('paperlink-tools') || '{}')); } catch {}
+const keepSettings = () => { try { localStorage.setItem('paperlink-tools', JSON.stringify(settings)); } catch {} };
+const liveLayer = document.querySelector('#live'), overlay = document.querySelector('#overlay');
+
+// Erases whole strokes, or with the precise eraser only the part under it.
 function eraseBetween(from, to) {
   const radius = 12 / view.scale;
-  const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / radius));
   let changed = false;
   pages.forEach((page, index) => {
     const top = pageTop(index);
-    if (Math.max(from.y, to.y) < top - radius - 200 || Math.min(from.y, to.y) > top + page.height + radius + 200) return;
-    const removed = new Set();
-    Array.from(inkOf(index).children).forEach((path, strokeIndex) => {
-      path.style.strokeWidth = String(radius * 2);
-      for (let step = 0; step <= steps; step++) {
-        const fraction = step / steps;
-        const sample = new DOMPoint(from.x + (to.x - from.x) * fraction, from.y + (to.y - from.y) * fraction - top);
-        if (path.isPointInStroke(sample)) { removed.add(strokeIndex); break; }
+    if (Math.max(from.y, to.y) < top - 400 || Math.min(from.y, to.y) > top + page.height + 400) return;
+    const a = { x: from.x, y: from.y - top }, b = { x: to.x, y: to.y - top };
+    const kept = [];
+    let pageChanged = false;
+    for (const stroke of page.strokes) {
+      const ink = parsed(stroke);
+      const pieces = !ink ? null : settings.eraser === 'precise' ? eraseFrom(ink, a, b, radius) : touches(ink, a, b, radius) ? [] : null;
+      if (pieces === null) { kept.push(stroke); continue; }
+      gestureOps.push({ type: 'remove', page: page.id, stroke });
+      for (const piece of pieces) {
+        if (kept.includes(piece)) continue;
+        kept.push(piece);
+        gestureOps.push({ type: 'add', page: page.id, stroke: piece });
       }
-      path.style.removeProperty('stroke-width');
-    });
-    if (removed.size) {
-      for (const strokeIndex of removed) gestureOps.push({ type: 'remove', page: page.id, stroke: page.strokes[strokeIndex] });
-      page.strokes = page.strokes.filter((stroke, strokeIndex) => !removed.has(strokeIndex));
-      changed = true;
+      pageChanged = true;
     }
+    if (pageChanged) { page.strokes = kept; changed = true; }
   });
   if (changed) render();
 }
 
+// The stroke being drawn lives in its own layer until the pen lifts.
+function startDrawing(event, start) {
+  const index = pageAt(start.y), top = pageTop(index);
+  const style = gestureTool === 'marker' ? { color: settings.markerColor, width: settings.markerWidth, highlighter: true }
+    : { color: settings.penColor, width: settings.penWidth, highlighter: false };
+  const pressure = gestureTool === 'pen' && settings.pressure && event.pointerType === 'pen';
+  drawing = { index, top, kind: pressure ? 'pressure' : 'line', ...style, start: { x: start.x, y: start.y - top }, points: [] };
+  liveLayer.setAttribute('transform', 'translate(0 ' + top + ')');
+  continueDrawing(event, start);
+}
+function continueDrawing(event, p) {
+  const at = { x: p.x, y: p.y - drawing.top };
+  if (gestureTool === 'shape') { drawing.points = shapePoints(settings.shape, drawing.start, at); drawing.end = at; }
+  else drawing.points.push(drawing.kind === 'pressure' ? { ...at, p: Math.min(1, event.pressure || 0.5) } : at);
+  liveLayer.replaceChildren(drawInk(drawing));
+}
+function finishDrawing() {
+  const { index } = drawing;
+  liveLayer.replaceChildren();
+  // A tap with the shape tool draws nothing.
+  if (gestureTool === 'shape' && Math.hypot(drawing.end.x - drawing.start.x, drawing.end.y - drawing.start.y) < 2) return;
+  const stroke = formatStroke(drawing);
+  if (pages[index].strokes.includes(stroke)) return;
+  pages[index].strokes.push(stroke);
+  appendStroke(index, stroke);
+  gestureOps.push({ type: 'add', page: pages[index].id, stroke });
+}
+
+// ── Lasso: select strokes on one page, then move, recolour, copy or delete them ──
+let lasso = null, picked = null, moving = null;
+const pickActions = document.querySelector('#pick-actions');
+function pickedBox() {
+  const boxes = picked.strokes.map(stroke => strokeBounds(parsed(stroke))).filter(Boolean);
+  const top = pageTop(picked.index), pad = 6 / view.scale;
+  return { x: Math.min(...boxes.map(b => b.minX)) - pad, y: Math.min(...boxes.map(b => b.minY)) + top - pad,
+    right: Math.max(...boxes.map(b => b.maxX)) + pad, bottom: Math.max(...boxes.map(b => b.maxY)) + top + pad };
+}
+function refreshPicked() {
+  if (!picked) return;
+  const page = pages[picked.index];
+  picked.strokes = picked.strokes.filter(stroke => page?.strokes.includes(stroke));
+  if (!picked.strokes.length) return clearPicked();
+  let rect = overlay.querySelector('.pick-box');
+  if (!rect) { rect = element('rect', { class: 'pick-box', 'vector-effect': 'non-scaling-stroke' }); overlay.append(rect); }
+  const box = pickedBox();
+  for (const [key, value] of Object.entries({ x: box.x, y: box.y, width: box.right - box.x, height: box.bottom - box.y })) rect.setAttribute(key, value);
+  rect.removeAttribute('transform');
+  positionPicked();
+}
+function positionPicked() {
+  if (!picked || !view || moving) { if (!moving) pickActions.hidden = true; return; }
+  const box = pickedBox(), sheetBox = sheet.getBoundingClientRect(), mainBox = sheet.parentElement.getBoundingClientRect();
+  const left = sheetBox.left - mainBox.left + ((box.x + box.right) / 2 - view.x) * view.scale;
+  const above = sheetBox.top - mainBox.top + (box.y - view.y) * view.scale - 56;
+  const below = sheetBox.top - mainBox.top + (box.bottom - view.y) * view.scale + 10;
+  pickActions.style.left = Math.min(mainBox.width - 120, Math.max(120, left)) + 'px';
+  pickActions.style.top = (above > 60 ? above : Math.min(mainBox.height - 60, below)) + 'px';
+  pickActions.hidden = false;
+}
+function pick(index, strokes) {
+  clearPicked();
+  if (!strokes.length) return;
+  picked = { index, strokes };
+  refreshPicked();
+}
+function clearPicked() {
+  picked = null;
+  overlay.querySelector('.pick-box')?.remove();
+  pickActions.hidden = true;
+}
+// Applies an edit to the selection as one undoable step; `replace` maps a stroke to its new form.
+function editPicked(replace) {
+  const page = pages[picked.index], ops = [], next = [];
+  for (const stroke of picked.strokes) {
+    const changed = replace(stroke);
+    if (changed === stroke) { next.push(stroke); continue; }
+    ops.push({ type: 'remove', page: page.id, stroke });
+    if (changed !== null && !page.strokes.includes(changed) && !next.includes(changed)) { ops.push({ type: 'add', page: page.id, stroke: changed }); next.push(changed); }
+  }
+  if (!ops.length) return;
+  applyOps(pages, ops);
+  past.push(ops);
+  future = [];
+  picked.strokes = next;
+  render();
+  save(ops);
+}
+const deletePicked = () => { editPicked(() => null); clearPicked(); };
+function duplicatePicked() {
+  const page = pages[picked.index], offset = 24;
+  const copies = picked.strokes.map(stroke => translateStroke(parsed(stroke), offset, offset)).filter(stroke => !page.strokes.includes(stroke));
+  if (!copies.length) return;
+  const ops = copies.map(stroke => ({ type: 'add', page: page.id, stroke }));
+  applyOps(pages, ops);
+  past.push(ops);
+  future = [];
+  picked.strokes = copies;
+  render();
+  save(ops);
+}
+function buildPickActions() {
+  const colors = document.createElement('div');
+  colors.className = 'group';
+  for (const color of PEN_COLORS) colors.append(swatch(color, false, () => editPicked(stroke => {
+    const ink = parsed(stroke);
+    return ink.highlighter ? stroke : restyleStroke(ink, { color });
+  })));
+  const buttons = document.createElement('div');
+  buttons.className = 'group';
+  buttons.append(textButton('Duplicate', false, duplicatePicked), textButton('Delete', false, deletePicked), textButton('Done', false, clearPicked));
+  pickActions.replaceChildren(colors, buttons);
+}
+
+// ── Text: typed into a box on the page, stored as a text stroke ──
+const textEditor = document.querySelector('#text-editor');
+let textEdit = null; // { index, x, y, original, color, size }
+function openText(index, x, y, original = null) {
+  commitText();
+  const ink = original && parsed(original);
+  textEdit = { index, x: ink ? ink.x : x, y: ink ? ink.y : y, original, color: ink ? ink.color : settings.penColor, size: ink ? ink.width : settings.textSize };
+  if (original) strokeElements[index].get(original)?.classList.add('is-editing');
+  textEditor.value = ink ? ink.text : '';
+  textEditor.style.color = textEdit.color || '';
+  textEditor.classList.toggle('on-pdf', pages[index].pdfPage !== undefined);
+  textEditor.hidden = false;
+  positionText();
+  textEditor.focus();
+}
+function positionText() {
+  if (!textEdit || !view) return;
+  const sheetBox = sheet.getBoundingClientRect(), mainBox = sheet.parentElement.getBoundingClientRect();
+  const lines = textEditor.value.split('\n');
+  textEditor.style.fontSize = textEdit.size * view.scale + 'px';
+  textEditor.style.left = sheetBox.left - mainBox.left + (textEdit.x - view.x) * view.scale + 'px';
+  textEditor.style.top = sheetBox.top - mainBox.top + (pageTop(textEdit.index) + textEdit.y - view.y) * view.scale + 'px';
+  textEditor.style.width = Math.max(4, ...lines.map(line => line.length + 1)) * 0.6 + 'em';
+  textEditor.style.height = lines.length * 1.25 + 'em';
+}
+function commitText(cancel = false) {
+  if (!textEdit) return;
+  const { index, x, y, original, color, size } = textEdit;
+  textEdit = null;
+  textEditor.hidden = true;
+  textEditor.blur();
+  const text = textEditor.value.replace(/\s+$/, '').slice(0, 4000);
+  const page = pages[index], ops = [];
+  const stroke = text.trim() ? formatStroke({ kind: 'text', x, y, width: size, color, text }) : null;
+  if (!cancel && page && stroke !== original) {
+    if (original && page.strokes.includes(original)) ops.push({ type: 'remove', page: page.id, stroke: original });
+    if (stroke && !page.strokes.includes(stroke)) ops.push({ type: 'add', page: page.id, stroke });
+  }
+  if (ops.length) {
+    applyOps(pages, ops);
+    past.push(ops);
+    future = [];
+    save(ops);
+  }
+  render();
+}
+textEditor.addEventListener('input', positionText);
+textEditor.addEventListener('blur', () => commitText());
+textEditor.addEventListener('keydown', event => {
+  if (event.key === 'Escape') { event.preventDefault(); commitText(true); }
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); commitText(); }
+});
+// A tap with the text tool edits the text under it or starts a new one.
+function tapText(p) {
+  const index = pageAt(p.y), top = pageTop(index), at = { x: p.x, y: p.y - top };
+  const hit = pages[index].strokes.slice().reverse().find(stroke => parsed(stroke)?.kind === 'text' && strokeDistance(parsed(stroke), at) <= 4 / view.scale);
+  openText(index, at.x, at.y - settings.textSize * 0.6, hit);
+}
+
 // ── Input: Pencil and mouse write; fingers pan (one) and zoom (two) ──
-const touches = new Map();
+const fingers = new Map();
 let touchGesture = null;
 function touchCenter() {
-  const points = [...touches.values()];
+  const points = [...fingers.values()];
   const x = points.reduce((sum, p) => sum + p.x, 0) / points.length;
   const y = points.reduce((sum, p) => sum + p.y, 0) / points.length;
   const distance = points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0;
@@ -624,37 +890,45 @@ sheet.addEventListener('pointerdown', event => {
   if (event.cancelable) event.preventDefault();
   if (event.pointerType === 'touch') {
     // A resting palm while writing must not move the page.
-    if (active !== null || touches.size >= 2) return;
+    if (active !== null || fingers.size >= 2) return;
     sheet.setPointerCapture(event.pointerId);
-    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     touchGesture = touchCenter();
     return;
   }
-  if (active !== null || event.button !== 0 || touches.size) return;
+  if (active !== null || event.button !== 0 || fingers.size) return;
+  commitText();
+  closeOptions();
   sheet.setPointerCapture(event.pointerId);
   active = event.pointerId;
   hideToolbar();
   gestureTool = tool;
   gestureOps = [];
   previousPoint = point(event);
+  gestureStart = previousPoint;
   if (gestureTool === 'ask') {
     selection = { start: previousPoint, rect: element('rect', { class: 'selection', 'vector-effect': 'non-scaling-stroke' }) };
     pageLayer.after(selection.rect);
   } else if (gestureTool === 'eraser') {
     eraseBetween(previousPoint, previousPoint);
-  } else {
-    const index = pageAt(previousPoint.y), top = pageTop(index);
-    const stroke = 'M ' + previousPoint.x + ' ' + (previousPoint.y - top) + ' l 0.01 0';
-    pages[index].strokes.push(stroke);
-    const path = element('path', { d: stroke });
-    inkOf(index).append(path);
-    drawing = { index, top, path };
+  } else if (gestureTool === 'lasso') {
+    const box = picked && pickedBox();
+    if (box && previousPoint.x >= box.x && previousPoint.x <= box.right && previousPoint.y >= box.y && previousPoint.y <= box.bottom) {
+      moving = { dx: 0, dy: 0 };
+      pickActions.hidden = true;
+    } else {
+      clearPicked();
+      lasso = { points: [previousPoint], path: element('path', { class: 'lasso', 'vector-effect': 'non-scaling-stroke' }) };
+      overlay.append(lasso.path);
+    }
+  } else if (gestureTool !== 'text') {
+    startDrawing(event, previousPoint);
   }
 });
 sheet.addEventListener('pointermove', event => {
-  if (touches.has(event.pointerId)) {
+  if (fingers.has(event.pointerId)) {
     if (event.cancelable) event.preventDefault();
-    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     const next = touchCenter();
     if (touchGesture.distance && next.distance) zoomAt(next.x, next.y, next.distance / touchGesture.distance);
     panBy(next.x - touchGesture.x, next.y - touchGesture.y);
@@ -672,25 +946,43 @@ sheet.addEventListener('pointermove', event => {
       selection.end = p;
     } else if (gestureTool === 'eraser') {
       eraseBetween(previousPoint, p);
-    } else {
-      const strokes = pages[drawing.index].strokes;
-      strokes[strokes.length - 1] += ' L ' + p.x + ' ' + (p.y - drawing.top);
-      drawing.path.setAttribute('d', strokes[strokes.length - 1]);
+    } else if (moving) {
+      moving.dx = p.x - gestureStart.x; moving.dy = p.y - gestureStart.y;
+      const shift = 'translate(' + moving.dx + ' ' + moving.dy + ')';
+      for (const stroke of picked.strokes) strokeElements[picked.index].get(stroke)?.setAttribute('transform', shift);
+      overlay.querySelector('.pick-box')?.setAttribute('transform', shift);
+    } else if (lasso) {
+      lasso.points.push(p);
+      lasso.path.setAttribute('d', 'M ' + lasso.points.map(q => q.x + ' ' + q.y).join(' L ') + ' Z');
+    } else if (drawing) {
+      continueDrawing(sample, p);
     }
     previousPoint = p;
   }
 });
+let gestureStart = null;
 function finish(event) {
-  if (touches.delete(event.pointerId)) { touchGesture = touches.size ? touchCenter() : null; return; }
+  if (fingers.delete(event.pointerId)) { touchGesture = fingers.size ? touchCenter() : null; return; }
   if (event.pointerId !== active) return;
   active = null;
-  if (drawing) {
-    const strokes = pages[drawing.index].strokes;
-    gestureOps.push({ type: 'add', page: pages[drawing.index].id, stroke: strokes[strokes.length - 1] });
-  }
+  if (drawing) finishDrawing();
   drawing = null;
+  if (moving) {
+    const { dx, dy } = moving;
+    moving = null;
+    if (Math.hypot(dx, dy) > 0.5) editPicked(stroke => translateStroke(parsed(stroke), dx, dy));
+    else refreshPicked();
+  }
+  if (lasso) {
+    const index = pageAt(lasso.points[0].y), top = pageTop(index);
+    const polygon = lasso.points.map(q => ({ x: q.x, y: q.y - top }));
+    lasso.path.remove();
+    lasso = null;
+    pick(index, pages[index].strokes.filter(stroke => parsed(stroke) && inLasso(parsed(stroke), polygon)));
+  }
   revealToolbarSoon();
   if (gestureTool === 'ask') openAsk();
+  if (gestureTool === 'text' && event.type === 'pointerup') tapText(gestureStart);
   if (gestureOps.length) {
     past.push(gestureOps);
     future = [];
@@ -708,14 +1000,78 @@ sheet.addEventListener('wheel', event => {
   if (event.ctrlKey || event.metaKey) zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * 0.01));
   else panBy(-event.deltaX, -event.deltaY);
 }, { passive: false });
-const tools = { pen: 'pen', eraser: 'eraser', 'ask-tool': 'ask' };
+
+// ── Toolbar: tapping the active tool again opens its options ──
+const tools = { pen: 'pen', marker: 'marker', eraser: 'eraser', lasso: 'lasso', 'shape-tool': 'shape', 'text-tool': 'text', 'ask-tool': 'ask' };
+const toolOptions = document.querySelector('#tool-options');
 function selectTool(name) {
+  commitText();
+  if (name !== 'lasso') clearPicked();
+  closeOptions();
   tool = name;
   for (const [id, value] of Object.entries(tools)) document.getElementById(id).setAttribute('aria-pressed', value === name);
 }
-for (const [id, value] of Object.entries(tools)) document.getElementById(id).onclick = () => selectTool(value);
+for (const [id, value] of Object.entries(tools)) {
+  document.getElementById(id).onclick = () => {
+    if (tool === value && toolOptions.hidden) openOptions(value);
+    else selectTool(value);
+  };
+}
+function textButton(label, pressed, onclick, title) {
+  const button = Object.assign(document.createElement('button'), { textContent: label, onclick });
+  button.setAttribute('aria-pressed', pressed);
+  if (title) button.title = title;
+  return button;
+}
+function swatch(color, pressed, onclick) {
+  const button = textButton('', pressed, onclick, color ? 'Colour ' + color : 'Ink');
+  button.className = 'swatch';
+  button.setAttribute('aria-label', button.title);
+  const dot = document.createElement('span');
+  if (color) dot.style.setProperty('--color', color);
+  button.append(dot);
+  return button;
+}
+function group(...children) {
+  const box = document.createElement('div');
+  box.className = 'group';
+  box.append(...children);
+  return box;
+}
+// One row of choices that writes `key` in the settings and redraws the panel.
+function choices(key, values, make) {
+  return group(...values.map(value => make(value, settings[key] === value, () => { settings[key] = value; keepSettings(); openOptions(tool); })));
+}
+const sizeButton = (width, max) => (value, pressed, onclick) => {
+  const button = textButton('', pressed, onclick, 'Width ' + value);
+  button.className = 'swatch size';
+  button.setAttribute('aria-label', button.title);
+  const bar = document.createElement('span');
+  bar.style.setProperty('--size', Math.max(2, Math.min(max, value * width)) + 'px');
+  button.append(bar);
+  return button;
+};
+function openOptions(name) {
+  const rows = {
+    pen: () => [choices('penColor', PEN_COLORS, swatch), choices('penWidth', [2, 3, 5, 8], sizeButton(1.4, 12)),
+      group(textButton('Pressure', settings.pressure, () => { settings.pressure = !settings.pressure; keepSettings(); openOptions(name); }, 'Apple Pencil pressure varies the width'))],
+    marker: () => [choices('markerColor', MARKER_COLORS, swatch), choices('markerWidth', [12, 20, 32], sizeButton(0.5, 16))],
+    shape: () => [choices('shape', ['line', 'arrow', 'rectangle', 'ellipse'], (value, pressed, onclick) => textButton(value[0].toUpperCase() + value.slice(1), pressed, onclick)),
+      choices('penColor', PEN_COLORS, swatch), choices('penWidth', [2, 3, 5, 8], sizeButton(1.4, 12))],
+    text: () => [choices('penColor', PEN_COLORS, swatch), choices('textSize', [16, 24, 36, 48], (value, pressed, onclick) => textButton(String(value), pressed, onclick, 'Text size ' + value))],
+    eraser: () => [choices('eraser', ['stroke', 'precise'], (value, pressed, onclick) => textButton(value === 'stroke' ? 'Whole strokes' : 'Precise', pressed, onclick))]
+  }[name];
+  if (!rows) return;
+  toolOptions.replaceChildren(...rows());
+  toolOptions.style.top = toolbar.getBoundingClientRect().bottom + 8 + 'px';
+  toolOptions.hidden = false;
+}
+function closeOptions() { toolOptions.hidden = true; }
+buildPickActions();
 function restoreHistory(source, destination) {
   if (active !== null || !source.length) return;
+  commitText();
+  clearPicked();
   const entry = source.pop();
   const ops = source === past ? invert(entry) : entry;
   applyOps(pages, ops);
@@ -738,10 +1094,62 @@ document.querySelector('#add-page').onclick = () => {
   showPage(pages.length - 1);
   save(ops);
 };
+// ── All pages: thumbnails to jump to; blank pages can be removed ──
+const overview = document.querySelector('#overview');
+function openOverview() {
+  const current = currentPage();
+  overview.querySelector('.grid').replaceChildren(...pages.map((page, index) => {
+    const figure = document.createElement('figure');
+    const thumb = document.createElementNS(SVG, 'svg');
+    thumb.setAttribute('class', 'thumb');
+    thumb.setAttribute('viewBox', '0 0 ' + page.width + ' ' + page.height);
+    const copy = pageLayer.children[index].cloneNode(true);
+    copy.removeAttribute('transform');
+    thumb.append(copy);
+    const open = textButton('', index === current, () => { overview.hidden = true; showPage(index); }, 'Page ' + (index + 1));
+    open.removeAttribute('aria-pressed');
+    open.setAttribute('aria-current', index === current);
+    open.append(thumb);
+    const label = document.createElement('figcaption');
+    label.textContent = String(index + 1);
+    figure.append(open, label);
+    if (currentDocument && pages.length > 1 && page.pdfPage === undefined && !page.strokes.length) {
+      const remove = textButton('×', false, () => {
+        const ops = [{ type: 'removePage', page: page.id, size: { width: page.width, height: page.height } }];
+        applyOps(pages, ops);
+        past.push(ops);
+        future = [];
+        render();
+        applyView();
+        save(ops);
+        openOverview();
+      }, 'Remove this blank page');
+      remove.className = 'remove';
+      remove.removeAttribute('aria-pressed');
+      remove.setAttribute('aria-label', remove.title);
+      figure.append(remove);
+    }
+    return figure;
+  }));
+  overview.hidden = false;
+}
+document.querySelector('#pages-button').onclick = () => { commitText(); openOverview(); };
+document.querySelector('#overview-close').onclick = () => { overview.hidden = true; };
+overview.onclick = event => { if (event.target === overview) overview.hidden = true; };
 document.querySelector('#previous-page').onclick = () => showPage(currentPage() - 1);
 document.querySelector('#next-page').onclick = () => showPage(currentPage() + 1);
 document.addEventListener('keydown', event => {
-  if (!view || event.target.closest?.('input, textarea') || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (!view || event.target.closest?.('input, textarea')) return;
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    if (event.shiftKey) restoreHistory(future, past); else restoreHistory(past, future);
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.key === 'Escape') { closeOptions(); clearPicked(); overview.hidden = true; return; }
+  if (picked && (event.key === 'Delete' || event.key === 'Backspace')) { event.preventDefault(); deletePicked(); return; }
+  const shortcut = { p: 'pen', h: 'marker', e: 'eraser', l: 'lasso', s: 'shape', t: 'text' }[event.key.toLowerCase()];
+  if (shortcut) { selectTool(shortcut); return; }
   const step = { PageDown: 1, PageUp: -1, Home: -Infinity, End: Infinity }[event.key];
   if (step === undefined) return;
   event.preventDefault();

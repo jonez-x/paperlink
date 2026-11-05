@@ -54,9 +54,32 @@ Deleting moves canvas, note, preview and a copied PDF to the system trash (macOS
 
 PDF pages keep their original look in both themes and are re-rendered sharply when you zoom. Rendering uses [pdf.js](https://github.com/mozilla/pdf.js) 5.4.624 (Apache-2.0), bundled in `public/vendor/pdfjs`, so Paperlink works offline without `npm install`. Obsidian previews show the PDF pages once the browser has opened the canvas.
 
+## Writing tools
+
+| Tool | Key | Tap again for |
+|---|---|---|
+| Pen | P | colour, width, Apple Pencil pressure (on by default) |
+| Highlighter | H | colour, width; drawn translucent below the ink |
+| Eraser | E | whole strokes or precise (cuts strokes apart) |
+| Lasso | L | – select strokes on one page, then drag inside the box to move; the bar above recolours, duplicates or deletes (Delete key) |
+| Shapes | S | line, arrow, rectangle or ellipse, with the pen's colour and width |
+| Text | T | colour and size; tap to type, tap existing text to edit it, Esc cancels |
+
+⌘/Ctrl+Z undoes, ⇧⌘/Ctrl+Shift+Z redoes. Tool settings are kept per browser. Pressure is used only for Apple Pencil (pointer type pen); mouse strokes keep a constant width.
+
+### Stroke format
+
+Every stroke is one string in a page's `strokes` array, so it is its own identity for operations, undo and sync. Optional prefixes come first: `#rrggbb` (colour; without one the theme's ink is used), `w<n>` (width, default 3; for text the size, default 24) and `h` (highlighter). Then one of:
+
+- `M x y l 0.01 0 L x y …`: a line of constant width (the only form in older files, which stay valid),
+- `V x y p x y p …`: a pressure stroke, `p` from 0 to 1; drawn as a filled outline,
+- `T x y <text>`: text with its top left at x y, URI-encoded.
+
+`src/ink.js` parses, validates and draws all three for the server, exports, previews and the browser (served at `/ink.js`). `paper inspect` lists typed text per page. A page is only removed while it has no strokes, so undoing "add page" on one device never deletes another device's writing.
+
 ## Exporting
 
-**Export PDF** in the browser's info popover downloads the PDF. `paper export <canvas>` writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and the handwriting is drawn on top as vector lines. Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.
+**Export PDF** in the browser's info popover downloads the PDF. `paper export <canvas>` writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and the handwriting is drawn on top as vectors in its colours, highlighters translucent below it. Text becomes real PDF text in Helvetica; characters outside its Latin set are replaced with "?". Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.
 
 ## Several devices at once
 

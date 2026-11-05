@@ -292,6 +292,12 @@ export async function serve({ port, lan, obsidian = true, assistant = null }) {
         res.end(await readFile(new URL('../public/index.html', import.meta.url)));
         return;
       }
+      // Stroke format and geometry, shared with the server.
+      if (req.url === '/ink.js' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(await readFile(new URL('./ink.js', import.meta.url)));
+        return;
+      }
       // pdf.js, served from the project so it works offline.
       const vendor = /^\/vendor\/pdfjs\/((?:[a-z_]+\/)?[A-Za-z0-9_.-]+)$/.exec(req.url);
       if (vendor && req.method === 'GET' && !vendor[1].includes('..')) {

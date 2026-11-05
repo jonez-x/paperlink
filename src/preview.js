@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { canvasBase, obsidianVault, safeFileName } from './documents.js';
 import { stateDirectory } from './config.js';
+import { HIGHLIGHT_OPACITY, parseStroke, strokeBounds as boundsOf, strokePath, textLines } from './ink.js';
 
 // Inside an Obsidian vault, "<Name>.paperlink" gets two companions:
 //   <Name>.md        – a note next to it embedding the preview, created once and
@@ -27,19 +28,27 @@ export const previewPath = (vault, id) => path.join(vault, PREVIEW_FOLDER, id + 
 
 const escapeXml = text => text.replace(/[<>&"]/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[char]);
 
-// Strokes are "M x y l 0.01 0 L x y …"; the relative dot segment is not a point.
 function strokeBounds(strokes) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const stroke of strokes) {
-    const numbers = stroke.replace(/ l 0\.01 0/, '').match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) || [];
-    for (let i = 0; i + 1 < numbers.length; i += 2) {
-      const x = Number(numbers[i]), y = Number(numbers[i + 1]);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  const boxes = strokes.map(parseStroke).filter(Boolean).map(boundsOf).filter(Boolean);
+  return boxes.length ? {
+    minX: Math.min(...boxes.map(box => box.minX)), minY: Math.min(...boxes.map(box => box.minY)),
+    maxX: Math.max(...boxes.map(box => box.maxX)), maxY: Math.max(...boxes.map(box => box.maxY))
+  } : null;
+}
+
+// SVG elements for a page's strokes, highlighters first so they lie below the ink.
+function strokeElements(strokes) {
+  const parsed = strokes.map(parseStroke).filter(Boolean);
+  return [...parsed.filter(stroke => stroke.highlighter), ...parsed.filter(stroke => !stroke.highlighter)].map(stroke => {
+    const color = stroke.color ?? INK;
+    if (stroke.kind === 'text') {
+      return `<text font-family="Arial, Helvetica, sans-serif" font-size="${stroke.width}" fill="${color}">` +
+        textLines(stroke).map(line => `<tspan x="${line.x}" y="${line.y}">${escapeXml(line.text)}</tspan>`).join('') + '</text>';
     }
-  }
-  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+    const opacity = stroke.highlighter ? ` opacity="${HIGHLIGHT_OPACITY}"` : '';
+    if (stroke.kind === 'pressure') return `<path d="${strokePath(stroke)}" fill="${color}"${opacity}/>`;
+    return `<path d="${strokePath(stroke)}" fill="none" stroke="${color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round"${opacity}/>`;
+  });
 }
 
 // Keeps the page width so handwriting has the same scale in every preview;
@@ -58,9 +67,7 @@ export function renderPreview(document, { backgrounds = {} } = {}) {
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" width="${round(width)}" height="${round(height)}">`,
     `<title>${escapeXml(document.title)}</title>`,
     `<rect x="${round(x)}" y="${round(y)}" width="${round(width)}" height="${round(height)}" fill="${PAPER}"/>`,
-    `<g fill="none" stroke="${INK}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">`,
-    ...strokes.map(stroke => `<path d="${stroke}"/>`),
-    '</g>',
+    ...strokeElements(strokes),
     '</svg>',
     ''
   ].join('\n');
@@ -77,9 +84,8 @@ function renderPages(document, backgrounds) {
     parts.push(`<g transform="translate(0 ${top})">`,
       `<rect width="${page.width}" height="${page.height}" fill="${background ? '#ffffff' : PAPER}" stroke="${BORDER}" stroke-width="2"/>`,
       ...(background ? [`<image href="${background}" width="${page.width}" height="${page.height}" preserveAspectRatio="none"/>`] : []),
-      `<g fill="none" stroke="${INK}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">`,
-      ...page.strokes.map(stroke => `<path d="${stroke}"/>`),
-      '</g>', '</g>');
+      ...strokeElements(page.strokes),
+      '</g>');
     top += page.height + PAGE_GAP;
     width = Math.max(width, page.width);
   }

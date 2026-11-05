@@ -32,7 +32,10 @@ To let the iPad connect, allow network access once: `paper config set lan true`.
 
 ## Writing
 
-- **Apple Pencil or mouse** writes; the eraser removes whole strokes.
+- **Apple Pencil or mouse** writes. Tap the active tool again for its options: pen colour, width and pressure; highlighter colour; whole-stroke or precise eraser; shape and text size.
+- **Highlighter**, **shapes** (line, arrow, rectangle, ellipse) and **text** (tap to type, tap text to edit it).
+- **Lasso** selects strokes on a page to move, recolour, duplicate or delete them.
+- **All pages** shows thumbnails to jump to; blank pages can be removed there.
 - **One finger** pans, **two fingers** zoom.
 - **Arrows** in the toolbar (or Page Up/Down, Home/End) jump between pages; **Fit** fits the page you are on.
 - **Export PDF** in the info menu gives you the worksheet with your handwriting, ready to hand in.

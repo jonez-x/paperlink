@@ -165,7 +165,7 @@ test('machine interface: canvas files anywhere, background server, links and err
     assert.equal((await paper('status')).running, false);
 
     // Stopping flushes the pending preview of the browser edit.
-    assert.match(await readFile(path.join(root, 'Vault', 'Paperlink Previews', inVault.id + '.svg'), 'utf8'), /<path d="M 10 10 l 0\.01 0 L 30 40"\/>/);
+    assert.match(await readFile(path.join(root, 'Vault', 'Paperlink Previews', inVault.id + '.svg'), 'utf8'), /<path d="M 10 10 l 0\.01 0 L 30 40" /);
     const refreshed = await paper('preview');
     assert.deepEqual(refreshed.map(result => result.id), [inVault.id], 'only canvases inside a vault');
     assert.equal(refreshed[0].noteCreated, false, 'existing notes are kept, not duplicated');
@@ -328,7 +328,10 @@ test('live sync: operations from several devices merge, replay safely and stream
     assert.equal((await send(iPad, 'ipad-2', [{ type: 'remove', page, stroke: b }, { type: 'remove', page, stroke: 'M 9 9 l 0.01 0' }])).status, 200);
     let document = await read(iPad);
     assert.deepEqual(document.pages.map(entry => entry.strokes), [[a], [a]]);
+    // A page someone wrote on stays, so undoing "add page" elsewhere loses no ink.
     assert.equal((await send(iPad, 'ipad-3', [{ type: 'removePage', page: 'page-2' }])).status, 200);
+    assert.equal((await read(iPad)).pages.length, 2);
+    assert.equal((await send(iPad, 'ipad-4', [{ type: 'remove', page: 'page-2', stroke: a }, { type: 'removePage', page: 'page-2' }])).status, 200);
     assert.equal((await read(iPad)).pages.length, 1);
 
     // A tab reconnecting with an old revision catches up from the recent history,
@@ -341,7 +344,7 @@ test('live sync: operations from several devices merge, replay safely and stream
       await reader.cancel();
       return text.split('\n\n').filter(Boolean).map(chunk => JSON.parse(chunk.slice(6)));
     };
-    assert.deepEqual((await catchUp(3)).map(event => event.revision), [4, 5, 5]);
+    assert.deepEqual((await catchUp(3)).map(event => event.revision), [4, 5, 6, 6]);
     controller.abort();
     await listening;
     await paper('stop');

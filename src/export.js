@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { canvasBase } from './documents.js';
 import { readCanvas } from './store.js';
+import { HIGHLIGHT_OPACITY, outline, parseStroke, textLines } from './ink.js';
 
 // Exports a canvas as a PDF with pdf-lib (vendored in vendor/pdf-lib). PDF
 // pages are copied unchanged and the ink is drawn on top as vectors, so text
@@ -10,7 +11,6 @@ import { readCanvas } from './store.js';
 
 const INK = [0x24 / 255, 0x23 / 255, 0x1f / 255];
 const A4_WIDTH = 595.28; // points; blank pages are 900 units wide
-const STROKE_WIDTH = 3;
 
 export const defaultExportPath = file => path.join(path.dirname(file), canvasBase(file) + ' (annotated).pdf');
 
@@ -29,15 +29,34 @@ export function mapper(box, rotation, pageWidth) {
   return { map, scale: s };
 }
 
-// "M x y l 0.01 0 L x y …" → point list; the dot segment becomes a tiny line.
-function strokePoints(stroke) {
-  const numbers = stroke.replace(/ l 0\.01 0/, ' dot').split(/[\s,]+/);
-  const points = [];
-  for (let i = 0; i < numbers.length; i++) {
-    if (numbers[i] === 'dot') { const [x, y] = points[points.length - 1]; points.push([x + 0.01, y]); continue; }
-    if (numbers[i] === 'M' || numbers[i] === 'L') { points.push([Number(numbers[i + 1]), Number(numbers[i + 2])]); i += 2; }
+const hexColor = (color, rgb) => color ? rgb(...[1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16) / 255)) : rgb(...INK);
+
+// Draws one page's strokes, highlighters first so they lie below the ink.
+function drawStrokes(target, strokes, { map, scale }, { rgb, LineCapStyle, degrees }, font) {
+  const parsed = strokes.map(parseStroke).filter(Boolean);
+  const ordered = [...parsed.filter(stroke => stroke.highlighter), ...parsed.filter(stroke => !stroke.highlighter)];
+  // drawSvgPath flips y, so PDF coordinates go in with a negated y.
+  const pathOf = (points, close) => points.map(({ x, y }, i) => { const [px, py] = map(x, y); return (i ? 'L ' : 'M ') + px.toFixed(2) + ' ' + (-py).toFixed(2); }).join(' ') + (close ? ' Z' : '');
+  for (const stroke of ordered) {
+    const color = hexColor(stroke.color, rgb);
+    if (stroke.kind === 'text') {
+      // The direction of the page's x axis in PDF space, for rotated pages.
+      const [ox, oy] = map(0, 0), [ux, uy] = map(1, 0);
+      const angle = Math.atan2(uy - oy, ux - ox) * 180 / Math.PI;
+      for (const line of textLines(stroke)) {
+        // The standard font covers Latin text; anything else becomes "?".
+        const text = [...line.text].map(char => { try { font.encodeText(char); return char; } catch { return '?'; } }).join('');
+        const [x, y] = map(line.x, line.y);
+        if (text.trim()) target.drawText(text, { x, y, size: stroke.width * scale, font, color, rotate: degrees(angle) });
+      }
+      continue;
+    }
+    if (!stroke.points.length) continue;
+    const opacity = stroke.highlighter ? HIGHLIGHT_OPACITY : 1;
+    if (stroke.kind === 'pressure') { target.drawSvgPath(pathOf(outline(stroke), true), { x: 0, y: 0, color, opacity }); continue; }
+    const points = stroke.points.length === 1 ? [stroke.points[0], { x: stroke.points[0].x + 0.01, y: stroke.points[0].y }] : stroke.points;
+    target.drawSvgPath(pathOf(points), { x: 0, y: 0, borderColor: color, borderOpacity: opacity, borderWidth: stroke.width * scale, borderLineCap: LineCapStyle.Round });
   }
-  return points.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
 }
 
 // `pages` (1-based numbers) limits the export; `region` ({x, y, width, height}
@@ -48,8 +67,10 @@ export async function exportPdf(file, id, output = defaultExportPath(file), { pa
     if (!Number.isInteger(number) || number < 1 || number > document.pages.length) throw new Error('Page ' + number + ' does not exist; the canvas has ' + document.pages.length + '.');
     return document.pages[number - 1];
   }) : document.pages;
-  const { PDFDocument, rgb, LineCapStyle } = await import(new URL('../vendor/pdf-lib/pdf-lib.esm.min.js', import.meta.url).href);
+  const lib = await import(new URL('../vendor/pdf-lib/pdf-lib.esm.min.js', import.meta.url).href);
+  const { PDFDocument, StandardFonts } = lib;
   const result = await PDFDocument.create();
+  const font = await result.embedFont(StandardFonts.Helvetica);
   let source = null;
   if (document.pdf) {
     const pdfFile = path.join(path.dirname(file), document.pdf.file);
@@ -70,13 +91,7 @@ export async function exportPdf(file, id, output = defaultExportPath(file), { pa
     const box = page.pdfPage !== undefined && source ? target.getCropBox() : { x: 0, y: 0, ...target.getSize() };
     const rotation = page.pdfPage !== undefined && source ? target.getRotation().angle : 0;
     const { map, scale } = mapper(box, rotation, page.width);
-    for (const stroke of page.strokes) {
-      const points = strokePoints(stroke).map(([u, v]) => map(u, v));
-      if (!points.length) continue;
-      // drawSvgPath flips y, so PDF coordinates go in with a negated y.
-      const d = points.map(([x, y], index) => (index ? 'L ' : 'M ') + x.toFixed(2) + ' ' + (-y).toFixed(2)).join(' ');
-      target.drawSvgPath(d, { x: 0, y: 0, borderColor: rgb(...INK), borderWidth: STROKE_WIDTH * scale, borderLineCap: LineCapStyle.Round });
-    }
+    drawStrokes(target, page.strokes, { map, scale }, lib, font);
     if (region) {
       const corners = [map(region.x, region.y), map(region.x + region.width, region.y + region.height)];
       const [left, right] = [Math.min(corners[0][0], corners[1][0]), Math.max(corners[0][0], corners[1][0])];

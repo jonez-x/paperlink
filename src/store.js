@@ -1,14 +1,13 @@
 import { readFile, rename, unlink, open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { validPdfName } from './pdf.js';
+import { validStroke } from './ink.js';
 
 const PAGE_ID = /^[a-zA-Z0-9-]{1,64}$/;
 const dimension = value => Number.isFinite(value) && value >= 50 && value <= 10000;
 
 export function validateStrokes(strokes) {
-  if (!Array.isArray(strokes) || strokes.length > 20000 ||
-      strokes.some(s => typeof s !== 'string' || s.length > 1000000 ||
-        !/^M [-+\d.eE ,]+ l 0\.01 0(?: L [-+\d.eE ,]+)*$/.test(s))) {
+  if (!Array.isArray(strokes) || strokes.length > 20000 || !strokes.every(validStroke)) {
     throw Object.assign(new Error('Invalid stroke data.'), { status: 400 });
   }
 }
@@ -127,7 +126,7 @@ export function validAnnotation(note) {
 //   { type: 'add', page, stroke }       adds a stroke unless it is there
 //   { type: 'remove', page, stroke }    removes it if it is there
 //   { type: 'addPage', page: { id, width, height } }
-//   { type: 'removePage', page }        blank pages only; PDF pages stay
+//   { type: 'removePage', page }        empty blank pages only; PDF pages stay
 //   { type: 'addAnnotation', annotation } / { type: 'removeAnnotation', id }
 // Each one is idempotent, so replays and concurrent edits converge.
 export function validateOperations(ops) {
@@ -163,7 +162,7 @@ export function applyOperations(pages, ops, annotations = []) {
     const page = pages[index];
     if (op.type === 'add' && !page.strokes.includes(op.stroke)) page.strokes.push(op.stroke);
     if (op.type === 'remove') { const at = page.strokes.indexOf(op.stroke); if (at >= 0) page.strokes.splice(at, 1); }
-    if (op.type === 'removePage' && page.pdfPage === undefined && pages.length > 1) pages.splice(index, 1);
+    if (op.type === 'removePage' && page.pdfPage === undefined && !page.strokes.length && pages.length > 1) pages.splice(index, 1);
   }
   return pages;
 }
