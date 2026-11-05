@@ -34,6 +34,7 @@ To let the iPad connect, allow network access once: `paper config set lan true`.
 
 - **Apple Pencil or mouse** writes; the eraser removes whole strokes.
 - **One finger** pans, **two fingers** zoom.
+- **Arrows** in the toolbar (or Page Up/Down, Home/End) jump between pages; **Fit** fits the page you are on.
 - **Export PDF** in the info menu gives you the worksheet with your handwriting, ready to hand in.
 
 ## Assistants

@@ -141,6 +141,11 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - Browser: ask tool (speech-bubble icon, only when an assistant is set): drag marks a region (dashed orange), a tap asks about the whole page; a form takes an optional question; status shows progress and errors; notes arrive live.
 - Verified: npm test (23 tests, new: full flow with a stand-in assistant command that answers through the shim: off by default, validation, 202, 429 while running, started/done events, note text with question and region). In Chrome with the stand-in: mark region, type question, Ask, note appears next to the region. The real `claude` preset was not run (it would use the user's account); the prompt was reviewed.
 
+## Page navigation (2026-11-05, Claude Code, branch feature/page-navigation)
+
+- Toolbar shows previous/next page buttons and a "3 / 4" indicator when a canvas has more than one page (the page under the screen centre). Page Up/Down, Home and End jump too (not while typing). Moving keeps the zoom and puts the page's top just below the toolbar. Fit now fits the current page instead of always page 1; adding a page uses the same jump.
+- Verified: npm test (24 tests). In headless Chrome against a sandbox server with a 4-page PDF canvas: indicator and disabled states at both ends, next/previous, keys, zoom then Fit stays on the page. Not tested on the iPad.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
