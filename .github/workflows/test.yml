@@ -19,3 +19,36 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: npm test
+
+  # The installers on a clean runner: their own Node, the `paper` command, a
+  # working MCP server. Setup itself is interactive and is skipped here.
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm pack && mv paperlink-*.tgz paperlink.tgz
+        shell: bash
+      - if: runner.os != 'Windows'
+        run: |
+          export PAPERLINK_HOME="$RUNNER_TEMP/paperlink"
+          sh install/install.sh "$PWD/paperlink.tgz"
+          sh install/install.sh "$PWD/paperlink.tgz" | grep -q 'already here'
+          "$RUNNER_TEMP/paperlink/bin/paper" --version
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | "$RUNNER_TEMP/paperlink/bin/paper" mcp | grep -q '"name":"paperlink"'
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PAPERLINK_HOME = "$env:RUNNER_TEMP\paperlink"
+          powershell -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Package "$PWD\paperlink.tgz"
+          if ($LASTEXITCODE) { exit 1 }
+          & "$env:RUNNER_TEMP\paperlink\bin\paper.cmd" --version
+          if ($LASTEXITCODE) { exit 1 }
+          $out = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | & "$env:RUNNER_TEMP\paperlink\bin\paper.cmd" mcp
+          if ($out -notmatch '"name":"paperlink"') { exit 1 }

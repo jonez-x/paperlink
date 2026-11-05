@@ -138,7 +138,7 @@ paper annotate "Sheet 4" --remove <id> | --clear
 | `remove_notes` | One note by ID, or all |
 | `export_pdf` | PDF with the handwriting for handing in |
 
-Claude Code: `claude mcp add paperlink -- paper mcp`. Claude Desktop and other clients (`claude_desktop_config.json`); using `node` with the full path works on every system, including Windows, where `paper` is a `.cmd` wrapper:
+`paper setup` registers the server in Claude Desktop (`claude_desktop_config.json`, other entries kept; a file that is not valid JSON is left alone), Claude Code (`claude mcp add --scope user`) and Cursor (`~/.cursor/mcp.json`), with the absolute paths of the running Node and `paper.js`. By hand, Claude Code: `claude mcp add paperlink -- paper mcp`. Claude Desktop and other clients (`claude_desktop_config.json`); using `node` with the full path works on every system, including Windows, where `paper` is a `.cmd` wrapper:
 
 ```json
 {
@@ -153,6 +153,19 @@ Relative canvas paths in `create_canvas` start at the folder the client launches
 **Ask from the page.** With `paper config set assistant claude` (and a server restart) the toolbar gets an ask button: mark a region, optionally type a question, and Claude Code runs on the computer and answers with notes. It is off by default. The browser only sends page, region and question; the command is fixed in the config, runs without a shell, and Claude may only use `paper inspect`, `paper snapshot`, `paper annotate` and read the snapshot. One request per canvas runs at a time (5-minute limit); output goes to `assistant.log` in the settings folder. Other assistants: `paper config set assistant '["my-agent","--flag","{prompt}"]'`.
 
 Notes live on a separate layer: they never change the handwriting, appear live on every open device, can be hidden and removed one by one (undo brings them back). A note made with a revision older than the canvas is marked as written for an earlier version.
+
+## Installers
+
+`npm run bundle` writes `dist/paperlink-<version>-installer.zip`: the app as `paperlink.tgz` (from `npm pack`) plus `install/`. The installers need no Node and no admin rights:
+
+| | macOS, Linux (`install.sh`) | Windows (`install.ps1`) |
+|---|---|---|
+| Start | `Install Paperlink.command`, or `sh install.sh [paperlink.tgz]` | `Install Paperlink.cmd` (runs PowerShell with `-ExecutionPolicy Bypass` for this script only) |
+| Folder | `~/.paperlink` | `%LOCALAPPDATA%\Paperlink` |
+| Node.js | latest 22.x from nodejs.org, SHA-256 checked, in `node/` | same, `win-x64` or `win-arm64` |
+| `paper` | `bin/paper`, added to the PATH in `~/.zprofile` (macOS) and `~/.bashrc` | `bin\paper.cmd`, added to the user PATH, plus a Start menu entry |
+
+`PAPERLINK_HOME` changes the folder. Running an installer again stops the server, replaces the app (and Node only when a newer 22.x exists), then runs `paper setup`, which is skipped without a terminal. Settings and canvases are not touched. CI runs both installers on clean macOS, Windows and Linux runners.
 
 ## Platforms
 

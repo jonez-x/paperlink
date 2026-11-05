@@ -6,7 +6,11 @@ Handwriting and PDF worksheets in the iPad browser, saved as files on your compu
 
 ## Install
 
-Requires [Node.js](https://nodejs.org) 22 or newer. Works on macOS, Windows and Linux.
+**With the installer** (macOS, Windows, Linux): unzip `paperlink-<version>-installer.zip` and double-click **Install Paperlink.command** (macOS) or **Install Paperlink.cmd** (Windows); on Linux run `sh install.sh`. It downloads Node.js for Paperlink alone (no admin rights needed), adds the `paper` command and walks you through setup: iPad access, AI assistants, first canvas. Run it again to update. Build the zip with `npm run bundle`.
+
+If macOS refuses to open the installer, right-click it and choose **Open**, or allow it under System Settings › Privacy & Security.
+
+**From the source**, with [Node.js](https://nodejs.org) 22 or newer:
 
 ```sh
 git clone https://github.com/jonez-x/paperlink.git
@@ -22,7 +26,7 @@ On Windows, if PowerShell says running scripts is disabled, allow them once for 
 paper
 ```
 
-The menu is driven with the arrow keys:
+The first run starts a short setup (again any time with `paper setup`). The menu is driven with the arrow keys:
 
 1. **New canvas**: pick a folder and, optionally, a PDF worksheet.
 2. **Open canvas**: scan the QR code with the iPad, or choose **Open canvas** to write on this computer or **Copy link** to send the link elsewhere.
@@ -42,7 +46,7 @@ To let the iPad connect, allow network access once: `paper config set lan true`.
 
 ## Assistants
 
-Claude and other assistants can read a page and leave notes next to your writing:
+Claude and other assistants can read a page and leave notes next to your writing. `paper setup` connects the ones it finds (Claude Desktop, Claude Code, Cursor). By hand:
 
 ```sh
 claude mcp add paperlink -- paper mcp

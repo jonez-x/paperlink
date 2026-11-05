@@ -154,6 +154,13 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 - Verified: npm test (27 tests; new test/ink.test.js: format round-trips and rejection, distance, outline, partial erase, lasso, shapes; styled strokes stored, rejected when invalid, exported with real text, previewed with highlighter below ink). Headless Chrome against a sandbox server with a PDF canvas: every tool driven with mouse and synthetic pen pressure, file contents checked after each step, undo via ⌘Z, overview jump, no console errors; screenshots in light and dark; `paper snapshot` of the export matches the browser.
 - Not tested on the iPad: real Pencil pressure feel, the on-screen keyboard with the text box, lasso dragging by finger vs Pencil (fingers still pan), toolbar width in portrait. Known limits: moved selections stay on their page; undoing a page removal re-adds the page at the end; text width in previews/exports is estimated.
 
+## Installers and setup wizard (2026-11-05, Claude Code, branch feature/installer)
+
+- `paper setup` (src/cli.js `cmdSetup`): iPad access, connects assistant apps found by src/setup.js (Claude Desktop config file, Claude Code via `claude mcp add --scope user`, Cursor `~/.cursor/mcp.json`; registered with absolute Node and paper.js paths), optional Ask button, restarts the server with the new settings, offers a first canvas. The first interactive `paper` runs it when no config file exists.
+- `install/install.sh` and `install/install.ps1` (+ double-click wrappers) download Node 22.x per user with checksum, unpack `paperlink.tgz`, add `paper` to the PATH; `npm run bundle` builds the zip in dist/. package.json `files` limits the package to the app.
+- Verified on macOS: installer in a sandboxed HOME with only /usr/bin:/bin on the PATH, twice (second run reuses Node, no duplicate PATH line); setup driven in a pty: first `paper` started setup, a fake Claude Desktop config got the server while its other entries stayed, server started with LAN, menu followed; the registered MCP command answered initialize and tools/list. npm test: 29 tests (test/setup.test.js).
+- Not verified locally: Windows and Linux installers (CI job `install` covers them without the interactive setup), Gatekeeper behaviour for the .command after a real download, the Windows firewall prompt, Claude Code and Cursor registration on a real machine.
+
 ## Next implementation step
 
 User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.

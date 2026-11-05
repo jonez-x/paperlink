@@ -23,6 +23,7 @@ import { parseStroke } from './ink.js';
 import { renderQr } from './qr.js';
 import { pdfToPng } from './raster.js';
 import { serveMcp } from './mcp.js';
+import { assistantApps } from './setup.js';
 import * as ui from './tui.js';
 
 const { c } = ui;
@@ -942,6 +943,50 @@ async function settings(ctx, status) {
   }
 }
 
+// ── First-time setup ─────────────────────────────────────────────────────────
+// Asks the few things that matter, connects assistant apps, starts the server
+// and offers a first canvas. Runs again safely; `paper` starts it once by itself.
+async function cmdSetup(ctx) {
+  if (!ctx.interactive) throw new CliError('`paper setup` asks questions, so it needs a terminal. Use `paper config set` in scripts.');
+  ui.clearScreen();
+  console.log(ui.banner('setup'));
+  console.log('  ' + c.muted('A few questions, then you can write. Change anything later under Settings in `paper`.') + '\n');
+  let config = ctx.config;
+
+  const lan = await ui.confirm({ message: 'Write on an iPad or tablet? (devices on this Wi-Fi may then connect)', initial: true });
+  if (lan === null) return;
+  config = await saveConfig({ ...config, lan });
+
+  const apps = await assistantApps();
+  if (apps.length) {
+    console.log();
+    const connect = await ui.confirm({ message: 'Let AI assistants read your pages and leave notes? Found: ' + apps.map(app => app.name).join(', '), initial: true });
+    if (connect) {
+      for (const app of apps) {
+        try { await app.connect(); console.log(ok(app.name + ' connected' + (app.note ? c.muted(' · ' + app.note) : ''))); }
+        catch (error) { console.log('  ' + c.danger('✗ ' + app.name + ': ' + error.message)); }
+      }
+      if (apps.some(app => app.id === 'claude-code') && !config.assistant) {
+        const ask = await ui.confirm({ message: 'Also add an "Ask" button to the page that Claude Code answers with notes?', initial: true });
+        if (ask) config = await saveConfig({ ...config, assistant: 'claude' });
+      }
+    }
+  }
+
+  ctx = await context(ctx.flags);
+  const running = await callServer(ctx, 'status');
+  if (running) await cmdStop(ctx);
+  console.log();
+  await cmdStart(ctx);
+  if (lan && process.platform === 'win32') console.log('\n  ' + c.muted('If Windows asks, allow Node.js on private networks, otherwise the iPad cannot connect.'));
+  console.log();
+  if (await ui.confirm({ message: 'Create your first canvas now?', initial: true })) {
+    console.log();
+    await cmdNew(ctx, []);
+  }
+  console.log('\n' + ok('All set. Run `paper` any time for the menu.'));
+}
+
 // ── Help ─────────────────────────────────────────────────────────────────────
 function helpText() {
   const command = (name, description) => '    ' + c.accent(name.padEnd(42)) + ' ' + c.muted(description);
@@ -982,6 +1027,7 @@ function helpText() {
     command('unpair <device> | --all', 'remove a device\'s access'),
     '',
     '  ' + c.bold('Settings'),
+    command('setup', 'guided setup: iPad, AI assistants, first canvas'),
     command('config', 'show settings'),
     command('config set <key> <value>', 'obsidian, lan, port, assistant (claude|off)'),
     '',
@@ -1013,7 +1059,12 @@ export async function main(argv) {
     if (command === 'canvas') [command, ...rest] = rest;
     if (flags.help || command === 'help') return console.log(helpText());
     switch (command) {
-      case undefined: return ctx.interactive ? await home(ctx) : console.log(helpText());
+      case undefined:
+        if (!ctx.interactive) return console.log(helpText());
+        // The first `paper` on this computer starts with setup.
+        if (!existsSync(configPath())) await cmdSetup(ctx);
+        return await home(ctx);
+      case 'setup': return await cmdSetup(ctx);
       case 'config': return await cmdConfig(ctx, rest);
       case 'serve': return await cmdServe(ctx);
       case 'start': return await cmdStart(ctx);
