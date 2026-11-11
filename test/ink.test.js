@@ -82,3 +82,27 @@ test('styled strokes and text are stored, synced, exported and previewed', async
     assert.match(svg, /<text [^>]*font-size="36"[^>]*><tspan x="100" y="332.4">Answer: √2 ä<\/tspan><\/text>/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('shape recognition: held strokes become clean lines, circles, triangles and rectangles', async () => {
+  const { recognizeShape } = await import('../src/ink.js');
+  const noisy = (f, n) => Array.from({ length: n }, (_, i) => { const p = f(i / (n - 1)); return { x: p.x + Math.sin(i * 1.7) * 1.2, y: p.y + Math.cos(i * 2.3) * 1.2 }; });
+  const side = (a, b, n = 20) => noisy(t => ({ x: a[0] + (b[0] - a[0]) * t, y: a[1] + (b[1] - a[1]) * t }), n);
+  assert.equal(recognizeShape(noisy(t => ({ x: 10 + 300 * t, y: 20 + 100 * t }), 50)).shape, 'line');
+  const circle = recognizeShape(noisy(t => ({ x: 200 + 80 * Math.cos(t * 2 * Math.PI), y: 200 + 78 * Math.sin(t * 2 * Math.PI) }), 80));
+  assert.equal(circle.shape, 'ellipse');
+  assert.ok(circle.points.every(p => Math.abs(Math.hypot(p.x - 200, p.y - 200) - circle.points[0].x + 200) < 1), 'nearly round becomes a circle');
+  assert.equal(recognizeShape([...side([100, 100], [300, 100]), ...side([300, 100], [300, 220]), ...side([300, 220], [100, 220]), ...side([100, 220], [100, 102])]).shape, 'rectangle');
+  assert.equal(recognizeShape([...side([100, 300], [300, 300]), ...side([300, 300], [200, 130]), ...side([200, 130], [100, 298])]).shape, 'triangle');
+  assert.equal(recognizeShape([...side([100, 300], [100, 100]), ...side([100, 100], [300, 100])]).shape, 'polyline');
+  assert.equal(recognizeShape(noisy(t => ({ x: 100 + 200 * t, y: 100 + 40 * Math.sin(t * 20) }), 80)), null, 'a scribble stays handwriting');
+  assert.equal(recognizeShape([{ x: 0, y: 0 }, { x: 2, y: 2 }]), null, 'a dot stays a dot');
+});
+
+test('transforming strokes scales widths and text sizes and rotates points', async () => {
+  const { parseStroke, transformStroke } = await import('../src/ink.js');
+  assert.equal(transformStroke(parseStroke('w4 M 0 0 l 0.01 0 L 10 0'), { cx: 0, cy: 0, scale: 2, angle: Math.PI / 2 }), 'w8 M 0 0 l 0.01 0 L 0 20');
+  assert.equal(transformStroke(parseStroke('#2f6fde V 0 0 0.5 10 0 0.8'), { cx: 0, cy: 0, scale: 0.5 }), '#2f6fde w1.5 V 0 0 0.5 5 0 0.8');
+  const text = parseStroke(transformStroke(parseStroke('T 10 10 Hi'), { cx: 0, cy: 0, scale: 2 }));
+  assert.equal(text.width, 48);
+  assert.equal(transformStroke(parseStroke('w1 M 0 0 l 0.01 0 L 10 0'), { cx: 0, cy: 0, scale: 0.1 }), 'w0.5 M 0 0 l 0.01 0 L 1 0', 'widths keep their minimum');
+});

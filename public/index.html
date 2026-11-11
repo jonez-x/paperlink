@@ -281,7 +281,7 @@ main {
 <g id="overlay"></g>
 </svg></main>
 <script type="module">
-import { eraseFrom, formatStroke, inLasso, parseStroke, shapePoints, strokeBounds, strokeDistance, strokePath, textLines, touches, translateStroke, restyleStroke } from '/ink.js';
+import { eraseFrom, formatStroke, inLasso, parseStroke, recognizeShape, shapePoints, strokeBounds, strokeDistance, strokePath, textLines, touches, transformStroke, translateStroke, restyleStroke } from '/ink.js';
 const SVG = 'http://www.w3.org/2000/svg';
 const sheet = document.querySelector('#sheet');
 const pageLayer = document.querySelector('#pages');
@@ -451,7 +451,8 @@ function size() { return { width: sheet.clientWidth || 1, height: sheet.clientHe
 const TOP = 72, MARGIN = 24;
 function fitScale(index = 0) {
   const { width, height } = size();
-  return Math.min((width - 2 * MARGIN) / documentWidth(), (height - TOP - MARGIN) / pages[index].height);
+  // Never zero or negative, also while the window is tiny or still laying out.
+  return Math.max(0.01, Math.min((width - 2 * MARGIN) / documentWidth(), (height - TOP - MARGIN) / pages[index].height));
 }
 // Fits the page in view (the first one before any view exists).
 function fit() {
@@ -693,7 +694,7 @@ function point(event) {
 // ── Tools and their settings (kept per browser) ──
 const PEN_COLORS = [null, '#2f6fde', '#e0453a', '#2f9e5b', '#8a4fd1', '#ff7028'];
 const MARKER_COLORS = ['#ffd23f', '#7ee081', '#ff8fc8', '#7cc7ff'];
-const settings = { penColor: null, penWidth: 3, pressure: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke' };
+const settings = { penColor: null, penWidth: 3, pressure: true, snap: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('paperlink-tools') || '{}')); } catch {}
 // The pen and highlighter buttons show the ink they draw with.
 function showToolInk() {
@@ -741,13 +742,33 @@ function startDrawing(event, start) {
   liveLayer.setAttribute('transform', 'translate(0 ' + top + ')');
   continueDrawing(event, start);
 }
+// Holding the pen still at the end of a stroke turns it into a clean shape
+// (the highlighter only straightens). Moving on afterwards changes nothing.
+let holdTimer = null, holdAnchor = null;
+function watchHold(event) {
+  if (!settings.snap || !drawing || drawing.snapped || (gestureTool !== 'pen' && gestureTool !== 'marker')) return;
+  if (holdAnchor && Math.hypot(event.clientX - holdAnchor.x, event.clientY - holdAnchor.y) < 4) return;
+  holdAnchor = { x: event.clientX, y: event.clientY };
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(snapHeld, 500);
+}
+function stopHold() { clearTimeout(holdTimer); holdTimer = holdAnchor = null; }
+function snapHeld() {
+  if (!drawing || drawing.snapped) return;
+  const shape = recognizeShape(drawing.points);
+  if (!shape || (gestureTool === 'marker' && shape.shape !== 'line')) return;
+  Object.assign(drawing, { kind: 'line', points: shape.points, snapped: true });
+  liveLayer.replaceChildren(drawInk(drawing));
+}
 function continueDrawing(event, p) {
+  if (drawing.snapped) return;
   const at = { x: p.x, y: p.y - drawing.top };
   if (gestureTool === 'shape') { drawing.points = shapePoints(settings.shape, drawing.start, at); drawing.end = at; }
   else drawing.points.push(drawing.kind === 'pressure' ? { ...at, p: Math.min(1, event.pressure || 0.5) } : at);
   liveLayer.replaceChildren(drawInk(drawing));
 }
 function finishDrawing() {
+  stopHold();
   const { index } = drawing;
   liveLayer.replaceChildren();
   // A tap with the shape tool draws nothing.
@@ -950,6 +971,7 @@ sheet.addEventListener('pointerdown', event => {
     }
   } else if (gestureTool !== 'text') {
     startDrawing(event, previousPoint);
+    watchHold(event);
   }
 });
 sheet.addEventListener('pointermove', event => {
@@ -986,6 +1008,7 @@ sheet.addEventListener('pointermove', event => {
     }
     previousPoint = p;
   }
+  if (drawing) watchHold(event);
 });
 let gestureStart = null;
 function finish(event) {
@@ -1078,11 +1101,12 @@ const sizeButton = (width, max) => (value, pressed, onclick) => {
   button.append(bar);
   return button;
 };
+const toggle = (key, label, title) => textButton(label, settings[key], () => { settings[key] = !settings[key]; keepSettings(); openOptions(tool); }, title);
 function openOptions(name) {
   const rows = {
     pen: () => [choices('penColor', PEN_COLORS, swatch), choices('penWidth', [2, 3, 5, 8], sizeButton(1.4, 12)),
-      group(textButton('Pressure', settings.pressure, () => { settings.pressure = !settings.pressure; keepSettings(); openOptions(name); }, 'Apple Pencil pressure varies the width'))],
-    marker: () => [choices('markerColor', MARKER_COLORS, swatch), choices('markerWidth', [12, 20, 32], sizeButton(0.5, 16))],
+      group(toggle('pressure', 'Pressure', 'Apple Pencil pressure varies the width'), toggle('snap', 'Snap shapes', 'Hold the pen still at the end of a stroke for a clean line, circle or rectangle'))],
+    marker: () => [choices('markerColor', MARKER_COLORS, swatch), choices('markerWidth', [12, 20, 32], sizeButton(0.5, 16)), group(toggle('snap', 'Straighten', 'Hold still at the end of a stroke for a straight line'))],
     shape: () => [choices('shape', ['line', 'arrow', 'rectangle', 'ellipse'], (value, pressed, onclick) => textButton(value[0].toUpperCase() + value.slice(1), pressed, onclick)),
       choices('penColor', PEN_COLORS, swatch), choices('penWidth', [2, 3, 5, 8], sizeButton(1.4, 12))],
     text: () => [choices('penColor', PEN_COLORS, swatch), choices('textSize', [16, 24, 36, 48], (value, pressed, onclick) => textButton(String(value), pressed, onclick, 'Text size ' + value))],

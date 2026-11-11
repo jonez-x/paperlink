@@ -219,3 +219,79 @@ export function shapePoints(shape, a, b) {
   }
   return [a, b];
 }
+
+// Scales a stroke by `scale` and turns it by `angle` (radians) around (cx, cy).
+// Widths and text sizes scale along; text keeps its upright orientation.
+export function transformStroke(stroke, { cx, cy, scale = 1, angle = 0 }) {
+  const cos = Math.cos(angle) * scale, sin = Math.sin(angle) * scale;
+  const move = point => ({ ...point, x: cx + (point.x - cx) * cos - (point.y - cy) * sin, y: cy + (point.x - cx) * sin + (point.y - cy) * cos });
+  if (stroke.kind === 'text') {
+    const box = strokeBounds(stroke), middle = move({ x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 });
+    const width = Math.min(400, Math.max(4, stroke.width * scale)), half = { x: (box.maxX - box.minX) / 2 * width / stroke.width, y: (box.maxY - box.minY) / 2 * width / stroke.width };
+    return formatStroke({ ...stroke, width, x: middle.x - half.x, y: middle.y - half.y });
+  }
+  return formatStroke({ ...stroke, width: Math.min(200, Math.max(0.5, stroke.width * scale)), points: stroke.points.map(move) });
+}
+
+// ── Shape recognition: a stroke held still at its end becomes a clean shape ──
+
+const pathLength = points => points.reduce((sum, q, i) => i ? sum + Math.hypot(q.x - points[i - 1].x, q.y - points[i - 1].y) : 0, 0);
+
+// Ramer–Douglas–Peucker: the corners of a polyline within `tolerance`.
+function simplify(points, tolerance) {
+  if (points.length < 3) return points.slice();
+  let index = 0, farthest = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const distance = segmentDistance(points[i], points[0], points[points.length - 1]);
+    if (distance > farthest) { farthest = distance; index = i; }
+  }
+  if (farthest <= tolerance) return [points[0], points[points.length - 1]];
+  return [...simplify(points.slice(0, index + 1), tolerance).slice(0, -1), ...simplify(points.slice(index), tolerance)];
+}
+
+// The clean version of a hand-drawn stroke, or null when it is no clear shape:
+// { shape: 'line' | 'polyline' | 'ellipse' | 'triangle' | 'rectangle' | 'quadrilateral', points }.
+export function recognizeShape(input) {
+  const points = input.map(({ x, y }) => ({ x, y }));
+  if (points.length < 2) return null;
+  const length = pathLength(points), first = points[0], last = points[points.length - 1];
+  if (length < 12) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  const width = maxX - minX, height = maxY - minY, diagonal = Math.hypot(width, height);
+  const gap = Math.hypot(last.x - first.x, last.y - first.y);
+
+  // Open strokes: a straight line, or a few straight segments.
+  if (gap > length * 0.25) {
+    const corners = simplify(points, Math.max(3, diagonal * 0.06));
+    if (corners.length === 2) return { shape: 'line', points: [first, last] };
+    if (corners.length <= 4 && pathLength(corners) > length * 0.9) return { shape: 'polyline', points: corners };
+    return null;
+  }
+
+  // Closed strokes. An ellipse when every point lies near the ellipse in the bounding box.
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  let rx = width / 2, ry = height / 2;
+  if (rx < 4 || ry < 4) return null;
+  const errors = points.map(p => Math.abs(Math.hypot((p.x - cx) / rx, (p.y - cy) / ry) - 1));
+  const roundness = errors.reduce((sum, e) => sum + e, 0) / errors.length;
+  const corners = simplify([...points, first], Math.max(4, diagonal * 0.08));
+  const polygon = corners.length - 1; // the closing point repeats the first
+  if (roundness < 0.09 || (roundness < 0.14 && polygon > 4)) {
+    // Nearly round becomes a circle.
+    if (Math.abs(rx - ry) < Math.max(rx, ry) * 0.15) rx = ry = (rx + ry) / 2;
+    return { shape: 'ellipse', points: shapePoints('ellipse', { x: cx - rx, y: cy - ry }, { x: cx + rx, y: cy + ry }) };
+  }
+  if (polygon === 3) return { shape: 'triangle', points: [...corners.slice(0, 3), corners[0]] };
+  if (polygon === 4) {
+    const quad = corners.slice(0, 4);
+    // Sides close to horizontal and vertical snap to an upright rectangle.
+    const upright = quad.every((p, i) => {
+      const q = quad[(i + 1) % 4], angle = Math.abs(Math.atan2(q.y - p.y, q.x - p.x)) % (Math.PI / 2);
+      return Math.min(angle, Math.PI / 2 - angle) < 0.2;
+    });
+    if (upright) return { shape: 'rectangle', points: shapePoints('rectangle', { x: minX, y: minY }, { x: maxX, y: maxY }) };
+    return { shape: 'quadrilateral', points: [...quad, quad[0]] };
+  }
+  return null;
+}
