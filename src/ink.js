@@ -275,7 +275,9 @@ function simplify(points, tolerance) {
 
 // The clean version of a hand-drawn stroke, or null when it is no clear shape:
 // { shape: 'line' | 'polyline' | 'ellipse' | 'triangle' | 'rectangle' | 'quadrilateral', points }.
-export function recognizeShape(input) {
+// Strokes smaller than `minSize` (page units, about 9 mm on A4 by default) stay
+// as written, so pausing at the end of a letter never turns it into a shape.
+export function recognizeShape(input, { minSize = 40 } = {}) {
   const points = input.map(({ x, y }) => ({ x, y }));
   if (points.length < 2) return null;
   const length = pathLength(points), first = points[0], last = points[points.length - 1];
@@ -283,6 +285,7 @@ export function recognizeShape(input) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
   const width = maxX - minX, height = maxY - minY, diagonal = Math.hypot(width, height);
+  if (diagonal < minSize) return null;
   const gap = Math.hypot(last.x - first.x, last.y - first.y);
 
   // Open strokes: a straight line, or a few straight segments.

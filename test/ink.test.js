@@ -99,6 +99,10 @@ test('shape recognition: held strokes become clean lines, circles, triangles and
   assert.equal(recognizeShape([...side([100, 300], [100, 100]), ...side([100, 100], [300, 100])]).shape, 'polyline');
   assert.equal(recognizeShape(noisy(t => ({ x: 100 + 200 * t, y: 100 + 40 * Math.sin(t * 20) }), 80)), null, 'a scribble stays handwriting');
   assert.equal(recognizeShape([{ x: 0, y: 0 }, { x: 2, y: 2 }]), null, 'a dot stays a dot');
+  // Letter-sized strokes stay handwriting, even when they look like a shape.
+  assert.equal(recognizeShape(noisy(t => ({ x: 100 + 12 * Math.cos(t * 2 * Math.PI), y: 100 + 12 * Math.sin(t * 2 * Math.PI) }), 30)), null, 'an "o" stays an o');
+  assert.equal(recognizeShape([{ x: 0, y: 0 }, { x: 0, y: 30 }]), null, 'an "l" stays an l');
+  assert.equal(recognizeShape([{ x: 0, y: 0 }, { x: 0, y: 30 }], { minSize: 10 }).shape, 'line');
 });
 
 test('transforming strokes scales widths and text sizes and rotates points', async () => {

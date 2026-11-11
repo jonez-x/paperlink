@@ -434,7 +434,7 @@ function templateElements(page) {
 function render() {
   const groups = pages.map((page, index) => {
     const pdf = page.pdfPage !== undefined;
-    const group = element('g', { transform: 'translate(0 ' + pageTop(index) + ')', class: pdf ? 'pdf-page' : '' });
+    const group = element('g', { transform: 'translate(0 ' + pageTop(index) + ')', class: pdf ? 'pdf-page' : '', 'data-id': page.id });
     // Paper lying on the desk: two soft offset layers instead of a blur filter, cheap while zooming.
     group.append(element('rect', { class: 'page-shadow', x: -3, y: 6, width: page.width + 6, height: page.height + 4, rx: 6, opacity: 0.5 }),
       element('rect', { class: 'page-shadow', x: -1, y: 2, width: page.width + 2, height: page.height + 2, rx: 2 }),
@@ -498,6 +498,27 @@ function drawInk(ink) {
   return path;
 }
 let strokeElements = []; // per page: stroke → element
+// Applies edits that are already in `pages` to the drawing. Stroke edits touch
+// only their elements, so erasing and syncing stay fast on long documents;
+// page changes redraw everything.
+function renderOps(ops) {
+  const drawnPages = [...pageLayer.children];
+  const inPlace = drawnPages.length === pages.length && drawnPages.every((group, index) => group.dataset.id === pages[index].id);
+  if (!inPlace || ops.some(op => op.type === 'addPage' || op.type === 'removePage')) return render();
+  let notes = false;
+  for (const op of ops) {
+    if (op.type === 'addAnnotation' || op.type === 'removeAnnotation') { notes = true; continue; }
+    const index = pages.findIndex(page => page.id === op.page);
+    if (index < 0) continue;
+    const elements = strokeElements[index];
+    const has = pages[index].strokes.includes(op.stroke);
+    if (!has && elements.has(op.stroke)) { elements.get(op.stroke).remove(); elements.delete(op.stroke); }
+    else if (has && !elements.has(op.stroke)) appendStroke(index, op.stroke);
+  }
+  if (notes) renderNotes();
+  refreshPicked();
+  scheduleSidebar();
+}
 function appendStroke(index, stroke, group = pageLayer.children[index]) {
   const ink = parsed(stroke);
   if (!ink || !group) return;
@@ -806,7 +827,7 @@ const liveLayer = document.querySelector('#live'), overlay = document.querySelec
 // Erases whole strokes, or with the precise eraser only the part under it.
 function eraseBetween(from, to) {
   const radius = 12 / view.scale;
-  let changed = false;
+  const before = gestureOps.length;
   pages.forEach((page, index) => {
     const top = pageTop(index);
     if (Math.max(from.y, to.y) < top - 400 || Math.min(from.y, to.y) > top + page.height + 400) return;
@@ -826,9 +847,9 @@ function eraseBetween(from, to) {
       }
       pageChanged = true;
     }
-    if (pageChanged) { page.strokes = kept; changed = true; }
+    if (pageChanged) page.strokes = kept;
   });
-  if (changed) render();
+  if (gestureOps.length > before) renderOps(gestureOps.slice(before));
 }
 
 // The stroke being drawn lives in its own layer until the pen lifts.
@@ -931,6 +952,10 @@ function positionPicked() {
   pickActions.style.top = (above > 60 ? above : Math.min(mainBox.height - 60, below)) + 'px';
   pickActions.hidden = false;
 }
+// Drops the live move or turn preview from the selected strokes.
+function clearPreview() {
+  for (const stroke of picked?.strokes ?? []) strokeElements[picked.index].get(stroke)?.removeAttribute('transform');
+}
 function pick(index, strokes) {
   clearPicked();
   if (!strokes.length) return;
@@ -956,7 +981,7 @@ function editPicked(replace) {
   past.push(ops);
   future = [];
   picked.strokes = next;
-  render();
+  renderOps(ops);
   save(ops);
 }
 const deletePicked = () => { editPicked(() => null); clearPicked(); };
@@ -969,7 +994,7 @@ function duplicatePicked() {
   past.push(ops);
   future = [];
   picked.strokes = copies;
-  render();
+  renderOps(ops);
   save(ops);
 }
 function buildPickActions() {
@@ -1029,7 +1054,8 @@ function commitText(cancel = false) {
     future = [];
     save(ops);
   }
-  render();
+  if (original) strokeElements[index]?.get(original)?.classList.remove('is-editing');
+  renderOps(ops);
 }
 textEditor.addEventListener('input', positionText);
 textEditor.addEventListener('blur', () => commitText());
@@ -1111,7 +1137,7 @@ async function insertPicture(file) {
     past.push(ops);
     future = [];
     selectTool('lasso');
-    render();
+    renderOps(ops);
     save(ops);
     // Selected right away, so it can be moved and scaled with the handles.
     pick(index, [stroke]);
@@ -1252,13 +1278,13 @@ function finish(event) {
     transforming = null;
     const cy = center.y - pageTop(picked.index);
     if (Math.abs(scale - 1) > 0.005 || Math.abs(angle) > 0.002) editPicked(stroke => transformStroke(parsed(stroke), { cx: center.x, cy, scale, angle }));
-    else refreshPicked();
+    else { clearPreview(); refreshPicked(); }
   }
   if (moving) {
     const { dx, dy } = moving;
     moving = null;
     if (Math.hypot(dx, dy) > 0.5) editPicked(stroke => translateStroke(parsed(stroke), dx, dy));
-    else refreshPicked();
+    else { clearPreview(); refreshPicked(); }
   }
   if (lasso) {
     const index = pageAt(lasso.points[0].y), top = pageTop(index);
@@ -1406,7 +1432,7 @@ function restoreHistory(source, destination) {
   const ops = source === past ? invert(entry) : entry;
   applyOps(pages, ops);
   destination.push(entry);
-  render();
+  renderOps(ops);
   applyView();
   save(ops);
 }
@@ -1698,8 +1724,9 @@ async function flushQueue() {
 let incoming = [], stream = null, wakeStream = null;
 function applyIncoming() {
   if (active !== null || !incoming.length) return;
-  applyOps(pages, incoming.splice(0));
-  render();
+  const ops = incoming.splice(0);
+  applyOps(pages, ops);
+  renderOps(ops);
 }
 function handleEvent(event) {
   if (event.live) { live = true; if (!queue.length) showSaveState(); return; }
