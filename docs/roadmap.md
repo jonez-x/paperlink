@@ -10,8 +10,6 @@
 
 ## Current state and next milestone
 
-The first prototype implements CLI serving, a single browser-local draft, basic pen and stroke eraser, undo/redo for drawing, and themes. The user has verified pen input and erasing on a real iPad. CLI file creation/listing and browser vault saving with explicit import are implemented.
+Stages 1 to 4 are implemented (see docs/handoff.md for what is verified where): pen with pressure, highlighter, erasers, lasso, shapes and text, zoom and pages, PDF worksheets, vault storage with Obsidian previews, PDF export, QR pairing with live sync, and the assistant layer with CLI, MCP and an Ask button answered by Claude Code or Codex. Installers bring their own Node, and `paper setup` connects assistant apps.
 
-Next, complete the handwriting interaction before evaluating it on a real iPad. Verify vault import and saving on iPad, then add Obsidian previews and PDF support. Two-finger pan/zoom and pressure-aware strokes remain pending. Erasing is now undoable. Verify palm handling, persistence after reload and theme switching. Device pairing is required before treating LAN mode as ready for normal use.
-
-Pending choices include CLI name availability, license, package format, rendering technology and concurrent editing semantics. Test the storage layout and pairing with disposable documents first. The main early decision is whether browser handwriting is comfortable enough for extended assignments.
+None of the stages has passed its acceptance criteria on a real iPad yet; the user verified only early pen input and erasing there. The next milestone is completing a real worksheet on the iPad and fixing what that shows. Pending choices: license, public release and concurrent editing semantics beyond the current per-stroke operations.

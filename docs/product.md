@@ -23,4 +23,4 @@ Use a browser interface. Test Safari with a real Apple Pencil early. Render stro
 
 The target server defaults to local-only access. Users explicitly enable LAN access and pair devices using a QR code. Laptop and iPad can open the same document simultaneously. During brief disconnections, the browser buffers pending strokes and synchronizes them after reconnecting. Status distinguishes locally pending edits from server-confirmed saves.
 
-These are target requirements. The initial prototype has browser-local storage and basic drawing only.
+These are target requirements. docs/handoff.md records what is implemented and verified; lasso scaling and an infinite canvas are not built yet.

@@ -1,6 +1,6 @@
 # Paperlink — agent handoff
 
-Updated 2026-11-03. Read this first, then README.md (user-facing, kept short), AGENTS.md and docs/reference.md (all technical detail), docs/product.md, docs/architecture.md, docs/roadmap.md.
+Updated 2026-11-11. Read this first, then README.md (user-facing, kept short), AGENTS.md and docs/reference.md (all technical detail), docs/product.md, docs/architecture.md, docs/roadmap.md.
 
 ## Goal and decisions
 
@@ -163,15 +163,15 @@ User decision: no library concept. A canvas is a `.paperlink` file wherever the 
 
 ## Next implementation step
 
-User tries the file-based CLI and the notes in Obsidian. Test the storage flow on the user's iPad. Add useful document navigation. Improve integration tests for simultaneous clients, network disconnects and interrupted writes. Then implement PDF import/export and multi-device synchronization.
+The user plans a first real worksheet on the iPad (2026-11-12): import a PDF, write, erase, highlight, zoom, ask Claude Code or Codex about a region, export. Collect what goes wrong there before adding features. Open device checks: Pencil pressure feel, the on-screen keyboard with the text box, lasso by Pencil while fingers pan, toolbar width in portrait, the Ask button from the iPad. After that: integration tests for simultaneous clients, network disconnects and interrupted writes; lasso scaling (in product.md, not built); moving selections across pages.
 
 ## Current limitations
 
-- Browser-only drafts are per device/origin. MCP and assistant triggers remain pending.
-- No pressure-aware ink, lasso or highlighter.
 - Undo history is session-only. localStorage data is only minimally validated.
+- Moved selections stay on their page; undoing a page removal re-adds the page at the end; text width in previews and exports is estimated; exported and snapshot text only covers Helvetica's Latin set ("?" otherwise).
 - Eraser hit testing and redraw iterate all paths. Optimize when document sizes require it.
 - LAN API access uses paired device tokens over HTTP and assumes a trusted LAN. HTTPS and production hardening remain pending.
+- The Ask button runs an assistant on the computer with a question typed on a paired device; the presets limit what it can do (see Assistant presets), custom commands are not limited.
 - Existing folder symlinks outside the vault are rejected. The file layer is not hardened against concurrent filesystem tampering.
 - Avoid claiming full iPad compatibility from desktop tests.
 
