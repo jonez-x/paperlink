@@ -198,6 +198,8 @@ main {
 :is(#sheet, .thumb, #live) .highlight { opacity: 0.35; }
 #sheet .lasso { fill: var(--accent-soft); stroke: var(--accent); stroke-dasharray: 5 4; }
 #sheet .pick-box { fill: none; stroke: var(--accent); stroke-dasharray: 6 4; }
+#sheet .pick-handle { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+#sheet .pick-stem { stroke: var(--accent); stroke-width: 1; }
 #sheet .is-editing { visibility: hidden; }
 @media (max-width: 600px) {
   header { padding: 0 8px 0 16px; }
@@ -781,7 +783,7 @@ function finishDrawing() {
 }
 
 // ── Lasso: select strokes on one page, then move, recolour, copy or delete them ──
-let lasso = null, picked = null, moving = null;
+let lasso = null, picked = null, moving = null, transforming = null;
 const pickActions = document.querySelector('#pick-actions');
 function pickedBox() {
   const boxes = picked.strokes.map(stroke => strokeBounds(parsed(stroke))).filter(Boolean);
@@ -799,14 +801,35 @@ function refreshPicked() {
   const box = pickedBox();
   for (const [key, value] of Object.entries({ x: box.x, y: box.y, width: box.right - box.x, height: box.bottom - box.y })) rect.setAttribute(key, value);
   rect.removeAttribute('transform');
+  drawHandles();
   positionPicked();
 }
+// Handles on the selection: the corner scales it, the knob above turns it.
+function handlePoints(box = pickedBox()) {
+  return { scale: { x: box.right, y: box.bottom }, rotate: { x: (box.x + box.right) / 2, y: box.y - 28 / view.scale }, top: { x: (box.x + box.right) / 2, y: box.y } };
+}
+function drawHandles() {
+  overlay.querySelectorAll('.pick-handle, .pick-stem').forEach(node => node.remove());
+  if (!picked || !view || moving || transforming) return;
+  const points = handlePoints(), r = 7 / view.scale;
+  overlay.append(element('line', { class: 'pick-stem', x1: points.top.x, y1: points.top.y, x2: points.rotate.x, y2: points.rotate.y, 'vector-effect': 'non-scaling-stroke' }),
+    element('circle', { class: 'pick-handle', 'data-handle': 'rotate', cx: points.rotate.x, cy: points.rotate.y, r, 'vector-effect': 'non-scaling-stroke' }),
+    element('rect', { class: 'pick-handle', 'data-handle': 'scale', x: points.scale.x - r, y: points.scale.y - r, width: 2 * r, height: 2 * r, rx: r / 3, 'vector-effect': 'non-scaling-stroke' }));
+}
+// Which handle is under a point, if any.
+function handleAt(p) {
+  if (!picked) return null;
+  const points = handlePoints(), reach = 16 / view.scale;
+  return ['rotate', 'scale'].find(name => Math.hypot(points[name].x - p.x, points[name].y - p.y) <= reach) ?? null;
+}
 function positionPicked() {
-  if (!picked || !view || moving) { if (!moving) pickActions.hidden = true; return; }
+  if (!picked || !view || moving || transforming) { if (!moving && !transforming) pickActions.hidden = true; return; }
+  drawHandles();
   const box = pickedBox(), sheetBox = sheet.getBoundingClientRect(), mainBox = sheet.parentElement.getBoundingClientRect();
   const left = sheetBox.left - mainBox.left + ((box.x + box.right) / 2 - view.x) * view.scale;
-  const above = sheetBox.top - mainBox.top + (box.y - view.y) * view.scale - 56;
-  const below = sheetBox.top - mainBox.top + (box.bottom - view.y) * view.scale + 10;
+  // Above the turning knob, or below the selection when there is no room.
+  const above = sheetBox.top - mainBox.top + (box.y - view.y) * view.scale - 96;
+  const below = sheetBox.top - mainBox.top + (box.bottom - view.y) * view.scale + 20;
   pickActions.style.left = Math.min(mainBox.width - 120, Math.max(120, left)) + 'px';
   pickActions.style.top = (above > 60 ? above : Math.min(mainBox.height - 60, below)) + 'px';
   pickActions.hidden = false;
@@ -819,7 +842,7 @@ function pick(index, strokes) {
 }
 function clearPicked() {
   picked = null;
-  overlay.querySelector('.pick-box')?.remove();
+  overlay.querySelectorAll('.pick-box, .pick-handle, .pick-stem').forEach(node => node.remove());
   pickActions.hidden = true;
 }
 // Applies an edit to the selection as one undoable step; `replace` maps a stroke to its new form.
@@ -959,11 +982,19 @@ sheet.addEventListener('pointerdown', event => {
     pageLayer.after(selection.rect);
   } else if (gestureTool === 'eraser') {
     eraseBetween(previousPoint, previousPoint);
+  } else if (gestureTool === 'lasso' && handleAt(previousPoint)) {
+    // Scale or turn around the middle of the selection.
+    const box = pickedBox(), center = { x: (box.x + box.right) / 2, y: (box.y + box.bottom) / 2 };
+    transforming = { mode: handleAt(previousPoint), center, scale: 1, angle: 0,
+      distance: Math.max(1e-6, Math.hypot(previousPoint.x - center.x, previousPoint.y - center.y)), start: Math.atan2(previousPoint.y - center.y, previousPoint.x - center.x) };
+    pickActions.hidden = true;
+    drawHandles();
   } else if (gestureTool === 'lasso') {
     const box = picked && pickedBox();
     if (box && previousPoint.x >= box.x && previousPoint.x <= box.right && previousPoint.y >= box.y && previousPoint.y <= box.bottom) {
       moving = { dx: 0, dy: 0 };
       pickActions.hidden = true;
+      drawHandles();
     } else {
       clearPicked();
       lasso = { points: [previousPoint], path: element('path', { class: 'lasso', 'vector-effect': 'non-scaling-stroke' }) };
@@ -995,6 +1026,20 @@ sheet.addEventListener('pointermove', event => {
       selection.end = p;
     } else if (gestureTool === 'eraser') {
       eraseBetween(previousPoint, p);
+    } else if (transforming) {
+      const { center, mode } = transforming;
+      if (mode === 'scale') transforming.scale = Math.max(0.05, Math.hypot(p.x - center.x, p.y - center.y) / transforming.distance);
+      else {
+        let angle = Math.atan2(p.y - center.y, p.x - center.x) - transforming.start;
+        // Snaps to every 15 degrees when close.
+        const step = Math.PI / 12, nearest = Math.round(angle / step) * step;
+        if (Math.abs(angle - nearest) < 0.05) angle = nearest;
+        transforming.angle = angle;
+      }
+      const top = pageTop(picked.index);
+      const turn = (cy) => 'translate(' + center.x + ' ' + cy + ') rotate(' + transforming.angle * 180 / Math.PI + ') scale(' + transforming.scale + ') translate(' + -center.x + ' ' + -cy + ')';
+      for (const stroke of picked.strokes) strokeElements[picked.index].get(stroke)?.setAttribute('transform', turn(center.y - top));
+      overlay.querySelector('.pick-box')?.setAttribute('transform', turn(center.y));
     } else if (moving) {
       moving.dx = p.x - gestureStart.x; moving.dy = p.y - gestureStart.y;
       const shift = 'translate(' + moving.dx + ' ' + moving.dy + ')';
@@ -1017,6 +1062,13 @@ function finish(event) {
   active = null;
   if (drawing) finishDrawing();
   drawing = null;
+  if (transforming) {
+    const { center, scale, angle } = transforming;
+    transforming = null;
+    const cy = center.y - pageTop(picked.index);
+    if (Math.abs(scale - 1) > 0.005 || Math.abs(angle) > 0.002) editPicked(stroke => transformStroke(parsed(stroke), { cx: center.x, cy, scale, angle }));
+    else refreshPicked();
+  }
   if (moving) {
     const { dx, dy } = moving;
     moving = null;
