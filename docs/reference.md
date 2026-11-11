@@ -58,14 +58,20 @@ PDF pages keep their original look in both themes and are re-rendered sharply wh
 
 | Tool | Key | Tap again for |
 |---|---|---|
-| Pen | P | colour, width, Apple Pencil pressure (on by default) |
-| Highlighter | H | colour, width; drawn translucent below the ink |
+| Pen | P | colour, width, Apple Pencil pressure (on by default), shape snapping, add to favorites |
+| Highlighter | H | colour, width, straightening, add to favorites; drawn translucent below the ink |
 | Eraser | E | whole strokes or precise (cuts strokes apart) |
-| Lasso | L | – select strokes on one page, then drag inside the box to move; the bar above recolours, duplicates or deletes (Delete key) |
+| Lasso | L | – select strokes on one page, then drag inside the box to move, the corner handle to scale and the knob above to turn (snaps to 15°); the bar above recolours, duplicates or deletes (Delete key) |
 | Shapes | S | line, arrow, rectangle or ellipse, with the pen's colour and width |
 | Text | T | colour and size; tap to type, tap existing text to edit it, Esc cancels |
 
 ⌘/Ctrl+Z undoes, ⇧⌘/Ctrl+Shift+Z redoes. Tool settings are kept per browser. Pressure is used only for Apple Pencil (pointer type pen); mouse strokes keep a constant width.
+
+**Shape snapping.** Holding the pen still for half a second at the end of a stroke replaces it with a clean shape: a straight line, a few straight segments, a circle or ellipse, a triangle, a rectangle (sides close to horizontal and vertical) or another quadrilateral. A scribble stays as written. The highlighter only straightens lines. Recognition lives in `recognizeShape` in `src/ink.js`.
+
+**Favorites.** Up to three pens or highlighters (tool, colour, width) sit in the toolbar as dots of their ink; a tap selects one. "Add to favorites" in the pen or highlighter options saves the current one (the oldest goes when there are three), "Remove favorite" drops it.
+
+**Pages.** The header holds the pages sidebar toggle (thumbnails, jump to a page, remove empty blank pages), page navigation, add page, fit and the notes switch. Add page offers blank, lined, squared or dotted paper; the new page follows the page in view. Pages from before templates keep the squared look. Templates are part of the page (`template` in the file) and appear in exports and previews.
 
 ### Stroke format
 
