@@ -815,7 +815,8 @@ function eraseBetween(from, to) {
     let pageChanged = false;
     for (const stroke of page.strokes) {
       const ink = parsed(stroke);
-      const pieces = !ink ? null : settings.eraser === 'precise' ? eraseFrom(ink, a, b, radius) : touches(ink, a, b, radius) ? [] : null;
+      // Pictures stay when erasing ink written on them; the lasso deletes them.
+      const pieces = !ink || ink.kind === 'image' ? null : settings.eraser === 'precise' ? eraseFrom(ink, a, b, radius) : touches(ink, a, b, radius) ? [] : null;
       if (pieces === null) { kept.push(stroke); continue; }
       gestureOps.push({ type: 'remove', page: page.id, stroke });
       for (const piece of pieces) {

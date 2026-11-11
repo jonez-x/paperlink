@@ -68,7 +68,7 @@ PDF pages keep their original look in both themes and are re-rendered sharply wh
 | Text | T | colour and size; tap to type, tap existing text to edit it, Esc cancels |
 | Insert image | – | – opens the picture picker (on the iPad: Photos, camera or Files); pasting a picture works too |
 
-Inserting a picture needs a canvas opened from the computer, not a browser-only draft. The browser scales it down to at most 2400 pixels on the long side and sends it as JPEG (quality 0.85); a PNG of up to 4 MB with transparency stays PNG. It lands centred in the visible part of the current page, at most 70% of the page wide and high, and is selected with the lasso, so it can be moved, scaled and turned (it stays upright; only its position turns) right away. Pictures lie below highlighters and ink. Either eraser removes a picture whole, like text.
+Inserting a picture needs a canvas opened from the computer, not a browser-only draft. The browser scales it down to at most 2400 pixels on the long side and sends it as JPEG (quality 0.85); a PNG of up to 4 MB with transparency stays PNG. It lands centred in the visible part of the current page, at most 70% of the page wide and high, and is selected with the lasso, so it can be moved, scaled and turned (it stays upright; only its position turns) right away. Pictures lie below highlighters and ink. The erasers leave pictures alone, so ink written on a photo can be erased; select a picture with the lasso to delete it.
 
 ⌘/Ctrl+Z undoes, ⇧⌘/Ctrl+Shift+Z redoes. Tool settings are kept per browser. Pressure is used only for Apple Pencil (pointer type pen); mouse strokes keep a constant width.
 
