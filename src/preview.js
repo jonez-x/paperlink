@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { canvasBase, obsidianVault, safeFileName } from './documents.js';
 import { stateDirectory } from './config.js';
-import { HIGHLIGHT_OPACITY, parseStroke, strokeBounds as boundsOf, strokePath, textLines } from './ink.js';
+import { HIGHLIGHT_OPACITY, parseStroke, strokeBounds as boundsOf, strokePath, templateMarks, textLines } from './ink.js';
 
 // Inside an Obsidian vault, "<Name>.paperlink" gets two companions:
 //   <Name>.md        – a note next to it embedding the preview, created once and
@@ -73,6 +73,15 @@ export function renderPreview(document, { backgrounds = {} } = {}) {
   ].join('\n');
 }
 
+// The page template as one path of lines and one of dots.
+function templateSvg(page) {
+  const { lines, dots } = templateMarks(page.template, page.width, page.height);
+  return [
+    ...(lines.length ? [`<path d="${lines.map(([x1, y1, x2, y2]) => `M${x1} ${y1}L${x2} ${y2}`).join('')}" stroke="${BORDER}" stroke-width="1" fill="none"/>`] : []),
+    ...(dots.length ? [`<path d="${dots.map(([x, y]) => `M${x} ${y}h0.01`).join('')}" stroke="${BORDER}" stroke-width="3.2" stroke-linecap="round" fill="none"/>`] : [])
+  ];
+}
+
 // Several pages (or PDF pages): every page in full, stacked as in the browser.
 // `backgrounds` maps page IDs to image data URLs of their PDF pages.
 const PAGE_GAP = 40;
@@ -83,7 +92,7 @@ function renderPages(document, backgrounds) {
     const background = backgrounds[page.id];
     parts.push(`<g transform="translate(0 ${top})">`,
       `<rect width="${page.width}" height="${page.height}" fill="${background ? '#ffffff' : PAPER}" stroke="${BORDER}" stroke-width="2"/>`,
-      ...(background ? [`<image href="${background}" width="${page.width}" height="${page.height}" preserveAspectRatio="none"/>`] : []),
+      ...(background ? [`<image href="${background}" width="${page.width}" height="${page.height}" preserveAspectRatio="none"/>`] : page.pdfPage === undefined ? templateSvg(page) : []),
       ...strokeElements(page.strokes),
       '</g>');
     top += page.height + PAGE_GAP;

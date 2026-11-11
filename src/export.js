@@ -3,11 +3,12 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { canvasBase } from './documents.js';
 import { readCanvas } from './store.js';
-import { HIGHLIGHT_OPACITY, outline, parseStroke, textLines } from './ink.js';
+import { HIGHLIGHT_OPACITY, outline, parseStroke, templateMarks, textLines } from './ink.js';
 
 // Exports a canvas as a PDF with pdf-lib (vendored in vendor/pdf-lib). PDF
 // pages are copied unchanged and the ink is drawn on top as vectors, so text
-// stays sharp and searchable; blank pages become white A4 pages.
+// stays sharp and searchable; blank pages become A4 pages with their template
+// (lines, squares or dots) in a light grey.
 
 const INK = [0x24 / 255, 0x23 / 255, 0x1f / 255];
 const A4_WIDTH = 595.28; // points; blank pages are 900 units wide
@@ -59,6 +60,20 @@ function drawStrokes(target, strokes, { map, scale }, { rgb, LineCapStyle, degre
   }
 }
 
+const TEMPLATE_GREY = [0.86, 0.85, 0.82];
+function drawTemplate(target, page, { map, scale }, { rgb }) {
+  const { lines, dots } = templateMarks(page.template, page.width, page.height);
+  const color = rgb(...TEMPLATE_GREY);
+  for (const [x1, y1, x2, y2] of lines) {
+    const [sx, sy] = map(x1, y1), [ex, ey] = map(x2, y2);
+    target.drawLine({ start: { x: sx, y: sy }, end: { x: ex, y: ey }, thickness: 0.5, color });
+  }
+  for (const [x, y] of dots) {
+    const [px, py] = map(x, y);
+    target.drawCircle({ x: px, y: py, size: 1.6 * scale, color });
+  }
+}
+
 // `pages` (1-based numbers) limits the export; `region` ({x, y, width, height}
 // in page units) crops a single page, e.g. for an assistant looking at an answer.
 export async function exportPdf(file, id, output = defaultExportPath(file), { pages: numbers, region } = {}) {
@@ -91,6 +106,7 @@ export async function exportPdf(file, id, output = defaultExportPath(file), { pa
     const box = page.pdfPage !== undefined && source ? target.getCropBox() : { x: 0, y: 0, ...target.getSize() };
     const rotation = page.pdfPage !== undefined && source ? target.getRotation().angle : 0;
     const { map, scale } = mapper(box, rotation, page.width);
+    if (page.pdfPage === undefined) drawTemplate(target, page, { map, scale }, lib);
     drawStrokes(target, page.strokes, { map, scale }, lib, font);
     if (region) {
       const corners = [map(region.x, region.y), map(region.x + region.width, region.y + region.height)];

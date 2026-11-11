@@ -295,3 +295,23 @@ export function recognizeShape(input) {
   }
   return null;
 }
+
+// ── Page templates for pages without a PDF ──
+// Pages from before templates have none and keep the squared look they had.
+export const TEMPLATES = ['blank', 'lined', 'squared', 'dotted'];
+export const validTemplate = template => template === undefined || TEMPLATES.includes(template);
+const SQUARE = 28, LINE = 36, LINE_TOP = 108;
+
+// Template marks in page units: straight lines as [x1, y1, x2, y2] and dots as [x, y].
+export function templateMarks(template = 'squared', width, height) {
+  const lines = [], dots = [];
+  if (template === 'squared') {
+    for (let x = SQUARE; x < width; x += SQUARE) lines.push([x, 0, x, height]);
+    for (let y = SQUARE; y < height; y += SQUARE) lines.push([0, y, width, y]);
+  } else if (template === 'lined') {
+    for (let y = LINE_TOP; y < height - LINE / 2; y += LINE) lines.push([0, y, width, y]);
+  } else if (template === 'dotted') {
+    for (let y = SQUARE; y < height; y += SQUARE) for (let x = SQUARE; x < width; x += SQUARE) dots.push([x, y]);
+  }
+  return { lines, dots };
+}

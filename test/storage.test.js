@@ -69,3 +69,28 @@ test('multi-page saves: new pages, kept sizes, protected PDF pages and old singl
     assert.equal(upgraded.pages[0].height, 1100);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('page templates and pages inserted after another page', async () => {
+  const { saveOperations } = await import('../src/store.js');
+  const { templateMarks } = await import('../src/ink.js');
+  const root = await mkdtemp(path.join(tmpdir(), 'paperlink-'));
+  try {
+    const file = path.join(root, 'Templates.paperlink');
+    const document = await createCanvas(file);
+    const first = document.pages[0].id;
+    const page = (id, template) => ({ id, width: 900, height: 1273, ...(template && { template }) });
+    await saveOperations(file, document.id, { operationId: 'a', ops: [{ type: 'addPage', page: page('end-page') }] });
+    await saveOperations(file, document.id, { operationId: 'b', ops: [{ type: 'addPage', page: page('lined-page', 'lined'), after: first }] });
+    // A page whose predecessor is gone lands at the end.
+    await saveOperations(file, document.id, { operationId: 'c', ops: [{ type: 'addPage', page: page('dotted-page', 'dotted'), after: 'missing-page' }] });
+    const saved = await readCanvas(file, document.id);
+    assert.deepEqual(saved.pages.map(p => [p.id === first ? 'first' : p.id, p.template ?? null]), [['first', null], ['lined-page', 'lined'], ['end-page', null], ['dotted-page', 'dotted']]);
+    await assert.rejects(saveOperations(file, document.id, { operationId: 'd', ops: [{ type: 'addPage', page: page('bad-page', 'music') }] }), error => error.status === 400);
+    await assert.rejects(saveCanvas(file, document.id, { revision: saved.revision, operationId: 'e', pages: [...saved.pages, { ...page('x-page', 'zigzag'), strokes: [] }] }), error => error.status === 400);
+    // Older pages without a template keep their squares; blank has none.
+    assert.ok(templateMarks(undefined, 900, 1273).lines.length > 70);
+    assert.deepEqual(templateMarks('blank', 900, 1273), { lines: [], dots: [] });
+    assert.ok(templateMarks('lined', 900, 1273).lines.every(([x1, y1, x2, y2]) => y1 === y2 && x1 === 0 && x2 === 900));
+    assert.equal(templateMarks('dotted', 900, 1273).dots.length, 32 * 45);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

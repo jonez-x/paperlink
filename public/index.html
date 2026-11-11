@@ -149,24 +149,41 @@ nav button:disabled { opacity: 0.35; background: transparent; cursor: default; t
 .panel .swatch[aria-pressed=true] span { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 .panel .size span { display: block; width: 20px; height: var(--size); border-radius: 4px; background: var(--ink); }
 #pick-actions { transform: translateX(-50%); }
+.panel .template { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 72px; padding: 8px 4px 4px; font-size: 12px; line-height: 16px; }
+.panel .template .thumb { width: 36px; height: auto; border-radius: 2px; box-shadow: 0 0 0 1px var(--line); }
+.panel .template .page { fill: var(--paper); }
+.panel .template .grid-line { stroke: var(--muted); stroke-opacity: 0.7; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.template-dot { fill: var(--muted); opacity: 0.8; }
 #text-editor { position: absolute; z-index: 1; margin: 0; padding: 0; border: 1px dashed var(--accent); border-radius: 2px; outline: none; background: transparent; color: var(--ink); font-family: Arial, Helvetica, sans-serif; line-height: 1.25; white-space: pre; overflow: hidden; resize: none; user-select: text; -webkit-user-select: text; }
 #text-editor.on-pdf { color: #1f1b16; }
-#overview { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; background: rgb(18 17 16 / 0.32); animation: fade 160ms var(--ease); }
-@keyframes fade { from { opacity: 0; } }
-#overview[hidden] { display: none; }
-#overview > div { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
-#overview .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; font-size: 16px; font-weight: 500; }
-#overview .head button { width: 36px; padding: 0; border: 0; color: var(--secondary); }
-#overview .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 16px; }
-#overview figure { position: relative; margin: 0; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-#overview figcaption { margin-top: 8px; }
-#overview figure > button { display: block; width: 100%; padding: 0; border: 0; border-radius: 6px; background: transparent; box-shadow: 0 0 0 1px var(--line), 0 2px 8px var(--page-shadow); overflow: hidden; }
-#overview figure > button[aria-current=true] { box-shadow: 0 0 0 2px var(--accent), 0 2px 8px var(--page-shadow); }
-#overview .thumb { display: block; width: 100%; height: auto; }
-#overview .remove { position: absolute; top: 8px; right: 8px; width: 28px; min-height: 28px; padding: 0; border-radius: 8px; background: var(--surface); color: var(--secondary); }
+/* Pages: a sidebar beside the desk on wide screens, over it on narrow ones. */
+#sidebar { position: fixed; z-index: 3; top: 48px; bottom: 0; left: 0; width: 192px; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--surface); animation: slide 220ms var(--ease); }
+@keyframes slide { from { opacity: 0; translate: -12px 0; } }
+#sidebar[hidden] { display: none; }
+body.with-sidebar main { margin-left: 192px; }
+/* The toolbar and its panels stay centred over the desk, not the whole window. */
+body.with-sidebar :is(nav, #tool-options) { left: calc(50% + 96px); max-width: calc(100vw - 208px); }
+#sidebar .head { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); font-weight: 500; }
+#sidebar .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+#sidebar .head button { margin-left: auto; width: 32px; min-height: 32px; height: 32px; padding: 6px; border: 0; color: var(--secondary); }
+#sidebar .list { flex: 1; overflow-y: auto; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 16px; scrollbar-width: thin; }
+#sidebar figure { position: relative; margin: 0; text-align: center; color: var(--muted); font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; }
+#sidebar figcaption { margin-top: 8px; }
+#sidebar figure > button { display: block; width: 100%; padding: 0; border: 0; border-radius: 4px; background: transparent; box-shadow: 0 0 0 1px var(--line), 0 2px 8px var(--page-shadow); overflow: hidden; }
+#sidebar figure > button:active { transform: scale(0.98); }
+#sidebar figure > button[aria-current=true] { box-shadow: 0 0 0 2px var(--accent), 0 2px 8px var(--page-shadow); }
+#sidebar figure > button[aria-current=true] + figcaption { color: var(--accent-ink); font-weight: 500; }
+#sidebar .thumb { display: block; width: 100%; height: auto; }
+#sidebar .remove { position: absolute; top: 4px; right: 4px; width: 28px; min-height: 28px; height: 28px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--secondary); }
+#sidebar .add { margin: 0 16px 16px; color: var(--secondary); }
+@media (max-width: 820px) {
+  body.with-sidebar main { margin-left: 0; }
+  body.with-sidebar :is(nav, #tool-options) { left: 50%; max-width: calc(100vw - 16px); }
+  #sidebar { box-shadow: var(--shadow); }
+}
 main {
   position: relative;
-  width: 100%;
+  min-width: 0;
   flex: 1;
   min-height: 0;
   margin: 0;
@@ -184,7 +201,9 @@ main {
 }
 :is(#sheet, .thumb) .page { fill: var(--paper); stroke: var(--line); }
 #sheet .page-shadow { fill: var(--page-shadow); }
-#sheet .grid-line { fill: none; stroke: var(--grid); }
+:is(#sheet, .thumb) .grid-line { fill: none; stroke: var(--grid); }
+:is(#sheet, .thumb) .grid-dot { fill: none; stroke: var(--grid); stroke-width: 3.6; stroke-linecap: round; }
+:root[data-theme=light] .grid-dot { stroke: rgb(31 27 22 / 0.28); }
 :is(#sheet, .thumb) .ink path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 /* PDF pages keep their original look in both themes, so ink stays dark on them. */
 :is(#sheet, .thumb) .pdf-page .page { fill: #ffffff; }
@@ -267,7 +286,7 @@ main {
 </div>
 </nav>
 <div id="tool-options" class="panel" hidden></div>
-<div id="overview" hidden><div role="dialog" aria-label="All pages"><div class="head"><span>Pages</span><button id="overview-close" aria-label="Close">×</button></div><div class="grid"></div></div></div>
+<aside id="sidebar" hidden aria-label="Pages"><div class="head"><span>Pages</span><span class="count"></span><button id="sidebar-close" aria-label="Close pages" title="Close pages"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="list"></div><button class="add" id="sidebar-add">Add page</button></aside>
 <form id="ask" hidden>
 <label for="ask-question">Ask about the marked area (optional)</label>
 <textarea id="ask-question" maxlength="1000" placeholder="e.g. Is this step right?"></textarea>
@@ -275,7 +294,6 @@ main {
 </form>
 <main><div id="notes" aria-label="Assistant notes"></div><textarea id="text-editor" hidden spellcheck="false" aria-label="Text"></textarea><div id="pick-actions" class="panel" hidden></div><svg id="sheet" aria-label="Writing surface">
 <defs>
-<pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 28 0 L 0 0 0 28"/></pattern>
 </defs>
 <rect id="mat-area" fill="none"/>
 <g id="pages"></g>
@@ -283,7 +301,7 @@ main {
 <g id="overlay"></g>
 </svg></main>
 <script type="module">
-import { eraseFrom, formatStroke, inLasso, parseStroke, recognizeShape, shapePoints, strokeBounds, strokeDistance, strokePath, textLines, touches, transformStroke, translateStroke, restyleStroke } from '/ink.js';
+import { eraseFrom, formatStroke, inLasso, parseStroke, recognizeShape, shapePoints, strokeBounds, strokeDistance, strokePath, textLines, touches, transformStroke, translateStroke, restyleStroke, templateMarks } from '/ink.js';
 const SVG = 'http://www.w3.org/2000/svg';
 const sheet = document.querySelector('#sheet');
 const pageLayer = document.querySelector('#pages');
@@ -319,7 +337,7 @@ function newId() {
 
 // ── Document: pages stacked vertically; strokes use page coordinates ──
 const PAGE_GAP = 40;
-const blankPage = () => ({ id: newId(), width: 900, height: 1273, strokes: [] }); // A4
+const blankPage = template => ({ id: newId(), width: 900, height: 1273, ...(template && { template }), strokes: [] }); // A4
 let pages = [blankPage()], past = [], future = [], active = null, tool = 'pen';
 let gestureOps = [], previousPoint = null, gestureTool = null, drawing = null, selection = null;
 try {
@@ -349,7 +367,13 @@ function applyOps(target, ops, notes = annotations) {
   for (const op of ops) {
     if (op.type === 'addAnnotation') { if (!notes.some(note => note.id === op.annotation.id)) notes.push(op.annotation); continue; }
     if (op.type === 'removeAnnotation') { const at = notes.findIndex(note => note.id === op.id); if (at >= 0) notes.splice(at, 1); continue; }
-    if (op.type === 'addPage') { if (!target.some(page => page.id === op.page.id)) target.push({ id: op.page.id, width: op.page.width, height: op.page.height, strokes: [] }); continue; }
+    if (op.type === 'addPage') {
+      if (target.some(page => page.id === op.page.id)) continue;
+      // After the page it follows when that one still exists, else at the end (as on the server).
+      const after = op.after === undefined ? -1 : target.findIndex(page => page.id === op.after);
+      target.splice(after < 0 ? target.length : after + 1, 0, { id: op.page.id, width: op.page.width, height: op.page.height, ...(op.page.template && { template: op.page.template }), strokes: [] });
+      continue;
+    }
     const index = target.findIndex(page => page.id === op.page);
     if (index < 0) continue;
     const page = target[index];
@@ -363,14 +387,17 @@ const invert = ops => ops.slice().reverse().map(op =>
   op.type === 'add' ? { ...op, type: 'remove' } : op.type === 'remove' ? { ...op, type: 'add' }
   : op.type === 'addAnnotation' ? { type: 'removeAnnotation', id: op.annotation.id, annotation: op.annotation }
   : op.type === 'removeAnnotation' ? { type: 'addAnnotation', annotation: op.annotation }
-  : op.type === 'addPage' ? { type: 'removePage', page: op.page.id, size: { width: op.page.width, height: op.page.height } }
-  : { type: 'addPage', page: { id: op.page, ...op.size } });
+  : op.type === 'addPage' ? { type: 'removePage', page: op.page.id, size: { width: op.page.width, height: op.page.height, ...(op.page.template && { template: op.page.template }) }, ...(op.after && { after: op.after }) }
+  : { type: 'addPage', page: { id: op.page, ...op.size }, ...(op.after && { after: op.after }) });
+// A removal that undo can put back where the page was.
+const removePageOp = index => ({ type: 'removePage', page: pages[index].id,
+  size: { width: pages[index].width, height: pages[index].height, ...(pages[index].template && { template: pages[index].template }) }, ...(index > 0 && { after: pages[index - 1].id }) });
 // Differences between two page lists as operations (for edits stored by older versions).
 function diffOps(from, to) {
   const ops = [];
   for (const page of to) {
     const before = from.find(candidate => candidate.id === page.id);
-    if (!before) ops.push({ type: 'addPage', page: { id: page.id, width: page.width, height: page.height } });
+    if (!before) ops.push({ type: 'addPage', page: { id: page.id, width: page.width, height: page.height, ...(page.template && { template: page.template }) } });
     for (const stroke of page.strokes) if (!before?.strokes.includes(stroke)) ops.push({ type: 'add', page: page.id, stroke });
     for (const stroke of before?.strokes || []) if (!page.strokes.includes(stroke)) ops.push({ type: 'remove', page: page.id, stroke });
   }
@@ -381,6 +408,14 @@ function save(ops) {
   try { localStorage.setItem('paperlink-draft', JSON.stringify(pages[0].strokes)); status.textContent = 'Saved in this browser'; }
   catch { status.textContent = 'Save failed – keep this browser open'; }
 }
+// The page's lines or dots; lines stay one screen pixel wide (see applyView).
+function templateElements(page) {
+  const { lines, dots } = templateMarks(page.template, page.width, page.height);
+  const parts = [];
+  if (lines.length) parts.push(element('path', { class: 'grid-line', d: lines.map(([x1, y1, x2, y2]) => 'M' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2).join(''), 'stroke-width': view ? 1 / view.scale : 1 }));
+  if (dots.length) parts.push(element('path', { class: 'grid-dot', d: dots.map(([x, y]) => 'M' + x + ' ' + y + 'h0.01').join('') }));
+  return parts;
+}
 function render() {
   const groups = pages.map((page, index) => {
     const pdf = page.pdfPage !== undefined;
@@ -390,7 +425,7 @@ function render() {
       element('rect', { class: 'page-shadow', x: -1, y: 2, width: page.width + 2, height: page.height + 2, rx: 2 }),
       element('rect', { class: 'page', width: page.width, height: page.height, 'vector-effect': 'non-scaling-stroke' }));
     if (pdf) group.append(element('image', { 'data-page': page.id, width: page.width, height: page.height, preserveAspectRatio: 'none', ...(backgrounds.get(page.id) && { href: backgrounds.get(page.id).url }) }));
-    else group.append(element('rect', { width: page.width, height: page.height, fill: 'url(#grid)' }));
+    else group.append(...templateElements(page));
     const marks = element('g', { class: 'marks' }), ink = element('g', { class: 'ink' });
     strokeElements[index] = new Map();
     group.append(marks, ink);
@@ -405,6 +440,7 @@ function render() {
   document.querySelector('#ask-tool').hidden = !currentDocument?.assistant;
   document.querySelector('#pages-button').hidden = pages.length < 2 && !currentDocument;
   document.querySelector('#document-title').textContent = currentDocument?.title ?? '';
+  scheduleSidebar();
   if (currentDocument) document.title = currentDocument.title + ' · Paperlink';
   updatePageNav();
 }
@@ -497,6 +533,7 @@ function applyView() {
   positionPicked();
   positionText();
   updatePageNav();
+  markCurrentInSidebar();
 }
 
 // ── Assistant notes ──
@@ -649,6 +686,7 @@ async function updateBackgrounds() {
     const url = URL.createObjectURL(blob);
     backgrounds.set(page.id, { url, width: wanted });
     sheet.querySelector('image[data-page="' + page.id + '"]')?.setAttribute('href', url);
+    scheduleSidebar();
   }
 }
 // The Obsidian preview needs page images the server cannot render itself.
@@ -696,7 +734,7 @@ function point(event) {
 // ── Tools and their settings (kept per browser) ──
 const PEN_COLORS = [null, '#2f6fde', '#e0453a', '#2f9e5b', '#8a4fd1', '#ff7028'];
 const MARKER_COLORS = ['#ffd23f', '#7ee081', '#ff8fc8', '#7cc7ff'];
-const settings = { penColor: null, penWidth: 3, pressure: true, snap: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke' };
+const settings = { penColor: null, penWidth: 3, pressure: true, snap: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke', template: 'squared' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('paperlink-tools') || '{}')); } catch {}
 // The pen and highlighter buttons show the ink they draw with.
 function showToolInk() {
@@ -1166,10 +1204,11 @@ function openOptions(name) {
   }[name];
   if (!rows) return;
   toolOptions.replaceChildren(...rows());
+  toolOptions.dataset.for = name;
   toolOptions.style.top = toolbar.getBoundingClientRect().bottom + 8 + 'px';
   toolOptions.hidden = false;
 }
-function closeOptions() { toolOptions.hidden = true; }
+function closeOptions() { toolOptions.hidden = true; delete toolOptions.dataset.for; }
 buildPickActions();
 function restoreHistory(source, destination) {
   if (active !== null || !source.length) return;
@@ -1186,47 +1225,89 @@ function restoreHistory(source, destination) {
 document.querySelector('#undo').onclick = () => restoreHistory(past, future);
 document.querySelector('#redo').onclick = () => restoreHistory(future, past);
 document.querySelector('#fit').onclick = fit;
-document.querySelector('#add-page').onclick = () => {
-  if (active !== null) return;
-  const page = blankPage();
-  const ops = [{ type: 'addPage', page: { id: page.id, width: page.width, height: page.height } }];
+// New pages follow the page in view, with the template chosen last.
+const TEMPLATE_NAMES = { blank: 'Blank', lined: 'Lined', squared: 'Squared', dotted: 'Dotted' };
+function addPage(template = settings.template) {
+  if (active !== null || !view) return;
+  const after = pages[currentPage()];
+  const page = blankPage(template);
+  const ops = [{ type: 'addPage', page: { id: page.id, width: page.width, height: page.height, template }, after: after.id }];
   applyOps(pages, ops);
   past.push(ops);
   future = [];
   render();
-  showPage(pages.length - 1);
+  showPage(pages.findIndex(candidate => candidate.id === page.id));
   save(ops);
+}
+function openPageOptions() {
+  const pick = template => () => { settings.template = template; keepSettings(); closeOptions(); addPage(template); };
+  toolOptions.replaceChildren(group(...Object.entries(TEMPLATE_NAMES).map(([template, name]) => {
+    const button = textButton('', settings.template === template, pick(template), name + ' page');
+    button.className = 'template';
+    const preview = document.createElementNS(SVG, 'svg');
+    preview.setAttribute('viewBox', '0 0 90 127');
+    preview.setAttribute('class', 'thumb');
+    const { lines, dots } = templateMarks(template, 900, 1273);
+    preview.innerHTML = '<rect width="90" height="127" class="page"/>' +
+      lines.map(([x1, y1, x2, y2]) => '<line class="grid-line" x1="' + x1 / 10 + '" y1="' + y1 / 10 + '" x2="' + x2 / 10 + '" y2="' + y2 / 10 + '"/>').join('') +
+      dots.map(([x, y]) => '<circle class="template-dot" cx="' + x / 10 + '" cy="' + y / 10 + '" r="1.1"/>').join('');
+    const label = document.createElement('span');
+    label.textContent = name;
+    button.append(preview, label);
+    return button;
+  })));
+  toolOptions.style.top = toolbar.getBoundingClientRect().bottom + 8 + 'px';
+  toolOptions.hidden = false;
+  toolOptions.dataset.for = 'page';
+}
+document.querySelector('#add-page').onclick = event => {
+  if (!toolOptions.hidden && toolOptions.dataset.for === 'page') return closeOptions();
+  commitText();
+  openPageOptions();
 };
-// ── All pages: thumbnails to jump to; blank pages can be removed ──
-const overview = document.querySelector('#overview');
-function openOverview() {
-  const current = currentPage();
-  overview.querySelector('.grid').replaceChildren(...pages.map((page, index) => {
+document.querySelector('#sidebar-add').onclick = () => addPage();
+
+// ── Pages sidebar: thumbnails to jump to; blank pages can be removed ──
+const sidebar = document.querySelector('#sidebar');
+let sidebarTimer = null;
+function thumbnail(index) {
+  const page = pages[index];
+  const thumb = document.createElementNS(SVG, 'svg');
+  thumb.setAttribute('class', 'thumb');
+  thumb.setAttribute('viewBox', '0 0 ' + page.width + ' ' + page.height);
+  if (!pageLayer.children[index]) return thumb;
+  const copy = pageLayer.children[index].cloneNode(true);
+  copy.removeAttribute('transform');
+  copy.querySelectorAll('.page-shadow').forEach(node => node.remove());
+  copy.querySelectorAll('.grid-line').forEach(node => node.setAttribute('stroke-width', 2));
+  thumb.append(copy);
+  return thumb;
+}
+function buildSidebar() {
+  if (sidebar.hidden) return;
+  const current = view ? currentPage() : 0;
+  sidebar.querySelector('.count').textContent = pages.length;
+  sidebar.querySelector('#sidebar-add').hidden = !currentDocument;
+  sidebar.querySelector('.list').replaceChildren(...pages.map((page, index) => {
     const figure = document.createElement('figure');
-    const thumb = document.createElementNS(SVG, 'svg');
-    thumb.setAttribute('class', 'thumb');
-    thumb.setAttribute('viewBox', '0 0 ' + page.width + ' ' + page.height);
-    const copy = pageLayer.children[index].cloneNode(true);
-    copy.removeAttribute('transform');
-    thumb.append(copy);
-    const open = textButton('', index === current, () => { overview.hidden = true; showPage(index); }, 'Page ' + (index + 1));
+    const open = textButton('', false, () => { showPage(index); if (matchMedia('(max-width: 820px)').matches) toggleSidebar(false); }, 'Page ' + (index + 1));
     open.removeAttribute('aria-pressed');
     open.setAttribute('aria-current', index === current);
-    open.append(thumb);
+    open.append(thumbnail(index));
     const label = document.createElement('figcaption');
     label.textContent = String(index + 1);
     figure.append(open, label);
     if (currentDocument && pages.length > 1 && page.pdfPage === undefined && !page.strokes.length) {
-      const remove = textButton('×', false, () => {
-        const ops = [{ type: 'removePage', page: page.id, size: { width: page.width, height: page.height } }];
+      const remove = textButton('', false, () => {
+        const ops = [removePageOp(index)];
         applyOps(pages, ops);
         past.push(ops);
         future = [];
         render();
         applyView();
         save(ops);
-        openOverview();
       }, 'Remove this blank page');
+      remove.innerHTML = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
       remove.className = 'remove';
       remove.removeAttribute('aria-pressed');
       remove.setAttribute('aria-label', remove.title);
@@ -1234,11 +1315,33 @@ function openOverview() {
     }
     return figure;
   }));
-  overview.hidden = false;
 }
-document.querySelector('#pages-button').onclick = () => { commitText(); openOverview(); };
-document.querySelector('#overview-close').onclick = () => { overview.hidden = true; };
-overview.onclick = event => { if (event.target === overview) overview.hidden = true; };
+// Thumbnails follow edits a moment later, so writing stays smooth.
+function scheduleSidebar() {
+  if (sidebar.hidden) return;
+  clearTimeout(sidebarTimer);
+  sidebarTimer = setTimeout(buildSidebar, 400);
+}
+function markCurrentInSidebar() {
+  if (sidebar.hidden || !view) return;
+  const current = currentPage();
+  sidebar.querySelectorAll('figure > button').forEach((button, index) => {
+    const now = index === current;
+    if (button.getAttribute('aria-current') === String(now)) return;
+    button.setAttribute('aria-current', now);
+    if (now) button.scrollIntoView({ block: 'nearest' });
+  });
+}
+function toggleSidebar(open = sidebar.hidden) {
+  sidebar.hidden = !open;
+  document.body.classList.toggle('with-sidebar', open);
+  document.querySelector('#pages-button').setAttribute('aria-pressed', open);
+  try { localStorage.setItem('paperlink-sidebar', open ? '1' : ''); } catch {}
+  buildSidebar();
+}
+document.querySelector('#pages-button').onclick = () => { commitText(); toggleSidebar(); };
+document.querySelector('#sidebar-close').onclick = () => toggleSidebar(false);
+try { if (localStorage.getItem('paperlink-sidebar') && !matchMedia('(max-width: 820px)').matches) toggleSidebar(true); } catch {}
 document.querySelector('#previous-page').onclick = () => showPage(currentPage() - 1);
 document.querySelector('#next-page').onclick = () => showPage(currentPage() + 1);
 document.addEventListener('keydown', event => {
@@ -1249,7 +1352,7 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
-  if (event.key === 'Escape') { closeOptions(); clearPicked(); overview.hidden = true; return; }
+  if (event.key === 'Escape') { closeOptions(); clearPicked(); if (matchMedia('(max-width: 820px)').matches) toggleSidebar(false); return; }
   if (picked && (event.key === 'Delete' || event.key === 'Backspace')) { event.preventDefault(); deletePicked(); return; }
   const shortcut = { p: 'pen', h: 'marker', e: 'eraser', l: 'lasso', s: 'shape', t: 'text' }[event.key.toLowerCase()];
   if (shortcut) { selectTool(shortcut); return; }

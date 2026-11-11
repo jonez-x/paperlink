@@ -1,7 +1,7 @@
 import { readFile, rename, unlink, open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { validPdfName } from './pdf.js';
-import { validStroke } from './ink.js';
+import { validStroke, validTemplate } from './ink.js';
 
 const PAGE_ID = /^[a-zA-Z0-9-]{1,64}$/;
 const dimension = value => Number.isFinite(value) && value >= 50 && value <= 10000;
@@ -19,7 +19,7 @@ function validatePages(pages) {
   if (!Array.isArray(pages) || !pages.length || pages.length > 500 ||
       pages.some(page => !PAGE_ID.test(page?.id ?? '') || ids.has(page.id) || !ids.add(page.id) ||
         !dimension(page.width) || !dimension(page.height) ||
-        (page.pdfPage !== undefined && !(Number.isInteger(page.pdfPage) && page.pdfPage > 0)))) {
+        (page.pdfPage !== undefined && !(Number.isInteger(page.pdfPage) && page.pdfPage > 0)) || !validTemplate(page.template))) {
     throw Object.assign(new Error('Invalid page data.'), { status: 400 });
   }
   for (const page of pages) validateStrokes(page.strokes);
@@ -60,7 +60,7 @@ function mergePages(document, request) {
   const pages = request.pages.map(page => {
     const existing = known.get(page.id);
     if (!existing && page.pdfPage !== undefined) throw Object.assign(new Error('Unknown PDF page.'), { status: 400 });
-    return existing ? { ...existing, strokes: page.strokes } : { id: page.id, width: page.width, height: page.height, strokes: page.strokes };
+    return existing ? { ...existing, strokes: page.strokes } : { id: page.id, width: page.width, height: page.height, ...(page.template && { template: page.template }), strokes: page.strokes };
   });
   const kept = new Set(pages.map(page => page.id));
   if (document.pages.some(page => page.pdfPage !== undefined && !kept.has(page.id))) throw Object.assign(new Error('PDF pages cannot be removed.'), { status: 400 });
@@ -131,7 +131,7 @@ export function validAnnotation(note) {
 // Edits as operations, so several devices can write at once without conflicts:
 //   { type: 'add', page, stroke }       adds a stroke unless it is there
 //   { type: 'remove', page, stroke }    removes it if it is there
-//   { type: 'addPage', page: { id, width, height } }
+//   { type: 'addPage', page: { id, width, height, template? }, after? }  after: the page it follows
 //   { type: 'removePage', page }        empty blank pages only; PDF pages stay
 //   { type: 'addAnnotation', annotation } / { type: 'removeAnnotation', id }
 // Each one is idempotent, so replays and concurrent edits converge.
@@ -139,7 +139,7 @@ export function validateOperations(ops) {
   if (!Array.isArray(ops) || !ops.length || ops.length > 5000) throw Object.assign(new Error('Invalid operations.'), { status: 400 });
   for (const op of ops) {
     const valid = ['add', 'remove'].includes(op?.type) ? PAGE_ID.test(op.page ?? '') && typeof op.stroke === 'string'
-      : op?.type === 'addPage' ? PAGE_ID.test(op.page?.id ?? '') && dimension(op.page.width) && dimension(op.page.height)
+      : op?.type === 'addPage' ? PAGE_ID.test(op.page?.id ?? '') && dimension(op.page.width) && dimension(op.page.height) && validTemplate(op.page.template) && (op.after === undefined || PAGE_ID.test(op.after))
       : op?.type === 'removePage' ? PAGE_ID.test(op.page ?? '')
       : op?.type === 'addAnnotation' ? validAnnotation(op.annotation)
       : op?.type === 'removeAnnotation' ? PAGE_ID.test(op.id ?? '') : false;
@@ -160,7 +160,11 @@ export function applyOperations(pages, ops, annotations = []) {
       continue;
     }
     if (op.type === 'addPage') {
-      if (!pages.some(page => page.id === op.page.id) && pages.length < 500) pages.push({ id: op.page.id, width: op.page.width, height: op.page.height, strokes: [] });
+      if (!pages.some(page => page.id === op.page.id) && pages.length < 500) {
+        // After the page it follows when that one still exists, else at the end.
+        const after = op.after === undefined ? -1 : pages.findIndex(page => page.id === op.after);
+        pages.splice(after < 0 ? pages.length : after + 1, 0, { id: op.page.id, width: op.page.width, height: op.page.height, ...(op.page.template && { template: op.page.template }), strokes: [] });
+      }
       continue;
     }
     const index = pages.findIndex(page => page.id === op.page);
