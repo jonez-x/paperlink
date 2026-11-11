@@ -591,11 +591,12 @@ async function cmdInspect(ctx, positional) {
       const parsed = page.strokes.map(parseStroke);
       // Typed text is readable without a snapshot.
       const texts = parsed.filter(stroke => stroke.kind === 'text').map(({ x, y, width, text }) => ({ x, y, size: width, text }));
-      return { number: index + 1, id: page.id, width: page.width, height: page.height, strokes: parsed.length - texts.length, texts, pdfPage: page.pdfPage ?? null };
+      const images = parsed.filter(stroke => stroke?.kind === 'image').length;
+      return { number: index + 1, id: page.id, width: page.width, height: page.height, strokes: parsed.length - texts.length - images, texts, images, pdfPage: page.pdfPage ?? null };
     }),
     annotations: (document.annotations || []).map(note => ({ ...note, pageNumber: document.pages.findIndex(page => page.id === note.page) + 1 }))
   };
-  emit(ctx, info, () => '\n' + canvasCard(canvas) + '\n' + info.pages.map(page => '  ' + c.accent('▪') + ' Page ' + page.number + c.muted(' · ' + page.width + '×' + page.height + ' · ' + page.strokes + ' stroke' + (page.strokes === 1 ? '' : 's') + (page.texts.length ? ' · ' + page.texts.length + ' text' + (page.texts.length === 1 ? '' : 's') : '') + (page.pdfPage ? ' · PDF page ' + page.pdfPage : ''))).join('\n') +
+  emit(ctx, info, () => '\n' + canvasCard(canvas) + '\n' + info.pages.map(page => '  ' + c.accent('▪') + ' Page ' + page.number + c.muted(' · ' + page.width + '×' + page.height + ' · ' + page.strokes + ' stroke' + (page.strokes === 1 ? '' : 's') + (page.texts.length ? ' · ' + page.texts.length + ' text' + (page.texts.length === 1 ? '' : 's') : '') + (page.images ? ' · ' + page.images + ' image' + (page.images === 1 ? '' : 's') : '') + (page.pdfPage ? ' · PDF page ' + page.pdfPage : ''))).join('\n') +
     (info.annotations.length ? '\n\n' + info.annotations.map(note => '  ' + c.yellow('✎') + ' p' + note.pageNumber + ' ' + note.text.split('\n')[0].slice(0, 60) + c.muted(' · ' + note.id.slice(0, 8))).join('\n') : '') + '\n');
 }
 

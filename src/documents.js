@@ -14,6 +14,11 @@ export const isCanvasFile = file => path.basename(file).endsWith(EXTENSION) || L
 // File name without the canvas extension: "Sheet 3.paperlink" → "Sheet 3".
 export const canvasBase = file => path.basename(file).replace(/\.paperlink(?:\.json)?$/, '');
 
+// Pictures on the pages live in "<base>.assets" next to the canvas, so the
+// folder travels with it and stays readable without Paperlink.
+export const ASSET_SUFFIX = '.assets';
+export const assetDirectory = file => path.join(path.dirname(file), canvasBase(file) + ASSET_SUFFIX);
+
 // Titles become file names that work on every system and as Obsidian links.
 export const safeFileName = title => title.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '') || 'Canvas';
 
@@ -66,7 +71,7 @@ export async function folderEntries(directory) {
     const entries = await readdir(directory, { withFileTypes: true });
     const visible = entries.filter(entry => !entry.name.startsWith('.'));
     return {
-      folders: visible.filter(entry => entry.isDirectory() && entry.name !== 'node_modules').map(entry => entry.name).sort((a, b) => a.localeCompare(b)),
+      folders: visible.filter(entry => entry.isDirectory() && entry.name !== 'node_modules' && !entry.name.endsWith(ASSET_SUFFIX)).map(entry => entry.name).sort((a, b) => a.localeCompare(b)),
       canvases: visible.filter(entry => entry.isFile() && isCanvasFile(entry.name)).map(entry => entry.name).sort((a, b) => a.localeCompare(b))
     };
   } catch (error) {

@@ -1,7 +1,7 @@
 import { open, readFile, rename, unlink } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { canvasBase } from './documents.js';
+import { assetDirectory, canvasBase } from './documents.js';
 import { readCanvas } from './store.js';
 import { HIGHLIGHT_OPACITY, outline, parseStroke, templateMarks, textLines } from './ink.js';
 
@@ -32,18 +32,38 @@ export function mapper(box, rotation, pageWidth) {
 
 const hexColor = (color, rgb) => color ? rgb(...[1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16) / 255)) : rgb(...INK);
 
-// Draws one page's strokes, highlighters first so they lie below the ink.
-function drawStrokes(target, strokes, { map, scale }, { rgb, LineCapStyle, degrees }, font) {
+// Embeds each picture of the canvas once per export. A missing or unreadable
+// file is left out (null), so one lost picture never blocks the export.
+function pictureLoader(result, directory) {
+  const embedded = new Map();
+  return asset => {
+    if (!embedded.has(asset)) embedded.set(asset, readFile(path.join(directory, asset))
+      .then(bytes => asset.endsWith('.png') ? result.embedPng(bytes) : result.embedJpg(bytes))
+      .catch(() => null));
+    return embedded.get(asset);
+  };
+}
+
+// Draws one page's strokes: pictures first, then highlighters, then the ink.
+function drawStrokes(target, strokes, { map, scale }, { rgb, LineCapStyle, degrees }, font, pictures) {
   const parsed = strokes.map(parseStroke).filter(Boolean);
-  const ordered = [...parsed.filter(stroke => stroke.highlighter), ...parsed.filter(stroke => !stroke.highlighter)];
+  const ordered = [...parsed.filter(stroke => stroke.kind === 'image'), ...parsed.filter(stroke => stroke.highlighter), ...parsed.filter(stroke => !stroke.highlighter && stroke.kind !== 'image')];
   // drawSvgPath flips y, so PDF coordinates go in with a negated y.
   const pathOf = (points, close) => points.map(({ x, y }, i) => { const [px, py] = map(x, y); return (i ? 'L ' : 'M ') + px.toFixed(2) + ' ' + (-py).toFixed(2); }).join(' ') + (close ? ' Z' : '');
+  // The direction of the page's x axis in PDF space, for rotated pages.
+  const [ox, oy] = map(0, 0), [ux, uy] = map(1, 0);
+  const angle = Math.atan2(uy - oy, ux - ox) * 180 / Math.PI;
   for (const stroke of ordered) {
+    if (stroke.kind === 'image') {
+      const picture = pictures.get(stroke.asset);
+      // pdf-lib turns an image around its lower left corner, which on the
+      // displayed page is the bottom left of the picture.
+      const [x, y] = map(stroke.x, stroke.y + stroke.height);
+      if (picture) target.drawImage(picture, { x, y, width: stroke.width * scale, height: stroke.height * scale, rotate: degrees(angle) });
+      continue;
+    }
     const color = hexColor(stroke.color, rgb);
     if (stroke.kind === 'text') {
-      // The direction of the page's x axis in PDF space, for rotated pages.
-      const [ox, oy] = map(0, 0), [ux, uy] = map(1, 0);
-      const angle = Math.atan2(uy - oy, ux - ox) * 180 / Math.PI;
       for (const line of textLines(stroke)) {
         // The standard font covers Latin text; anything else becomes "?".
         const text = [...line.text].map(char => { try { font.encodeText(char); return char; } catch { return '?'; } }).join('');
@@ -86,6 +106,7 @@ export async function exportPdf(file, id, output = defaultExportPath(file), { pa
   const { PDFDocument, StandardFonts } = lib;
   const result = await PDFDocument.create();
   const font = await result.embedFont(StandardFonts.Helvetica);
+  const picture = pictureLoader(result, assetDirectory(file));
   let source = null;
   if (document.pdf) {
     const pdfFile = path.join(path.dirname(file), document.pdf.file);
@@ -107,7 +128,9 @@ export async function exportPdf(file, id, output = defaultExportPath(file), { pa
     const rotation = page.pdfPage !== undefined && source ? target.getRotation().angle : 0;
     const { map, scale } = mapper(box, rotation, page.width);
     if (page.pdfPage === undefined) drawTemplate(target, page, { map, scale }, lib);
-    drawStrokes(target, page.strokes, { map, scale }, lib, font);
+    const pictures = new Map();
+    for (const stroke of page.strokes.map(parseStroke)) if (stroke?.kind === 'image') pictures.set(stroke.asset, await picture(stroke.asset));
+    drawStrokes(target, page.strokes, { map, scale }, lib, font, pictures);
     if (region) {
       const corners = [map(region.x, region.y), map(region.x + region.width, region.y + region.height)];
       const [left, right] = [Math.min(corners[0][0], corners[1][0]), Math.max(corners[0][0], corners[1][0])];

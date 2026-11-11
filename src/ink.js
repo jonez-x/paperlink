@@ -5,9 +5,12 @@
 //   [#rrggbb] [w<width>] [h] M x y l 0.01 0 [L x y]…   line of constant width
 //   [#rrggbb] [w<width>] [h] V x y p [x y p]…          pressure p (0–1) varies the width
 //   [#rrggbb] [w<size>] T x y <URI-encoded text>        text, top left at x y
+//   I x y w h <asset>                                   picture, top left at x y, w × h
 // Without a colour the theme's ink is used; without w the width is 3 (text 24).
 // h marks a highlighter: translucent and drawn below the ink. Files from before
 // styles hold only the first form without prefixes, which stays valid.
+// Pictures take no prefixes. <asset> names a file in the "<canvas>.assets"
+// folder next to the canvas: 16 hex digits of its content hash plus .jpg/.png.
 
 export const DEFAULT_WIDTH = 3;
 export const DEFAULT_TEXT_SIZE = 24;
@@ -15,10 +18,19 @@ export const HIGHLIGHT_OPACITY = 0.35;
 export const LINE_HEIGHT = 1.25;
 const NUMBER = String.raw`[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?`;
 const FORMAT = new RegExp(String.raw`^(#[0-9a-f]{6} )?(w${NUMBER} )?(?:(h )?(M [-+\d.eE ,]+ l 0\.01 0(?: L [-+\d.eE ,]+)*|V(?: ${NUMBER})+)|T (${NUMBER}) (${NUMBER}) (\S+))$`);
+const IMAGE = new RegExp(String.raw`^I (${NUMBER}) (${NUMBER}) (${NUMBER}) (${NUMBER}) (\S+)$`);
+export const ASSET = /^[0-9a-f]{16}\.(?:jpg|png)$/;
+export const validAssetName = name => typeof name === 'string' && ASSET.test(name);
 const round = (value, digits = 2) => Math.round(value * 10 ** digits) / 10 ** digits;
 
 // The parts of a stroke, or null when the string is not one.
 export function parseStroke(stroke) {
+  const image = typeof stroke === 'string' && stroke.length <= 200 && IMAGE.exec(stroke);
+  if (image) {
+    const [x, y, width, height] = image.slice(1, 5).map(Number), asset = image[5];
+    if (!validAssetName(asset) || ![x, y].every(value => Math.abs(value) <= 100000) || ![width, height].every(value => value >= 1 && value <= 20000)) return null;
+    return { kind: 'image', x, y, width, height, asset };
+  }
   const match = typeof stroke === 'string' && stroke.length <= 1000000 && FORMAT.exec(stroke);
   if (!match) return null;
   const [, colorToken, widthToken, highlightToken, line, x, y, encoded] = match;
@@ -55,7 +67,9 @@ export function parseStroke(stroke) {
 
 export const validStroke = stroke => parseStroke(stroke) !== null;
 
-export function formatStroke({ kind = 'line', color = null, width, highlighter = false, points = [], x, y, text }) {
+export function formatStroke({ kind = 'line', color = null, width, height, highlighter = false, points = [], x, y, text, asset }) {
+  // Pictures keep their own colours: no colour, width or highlighter prefix.
+  if (kind === 'image') return 'I ' + [x, y, width, height].map(value => round(value)).join(' ') + ' ' + asset;
   const standard = kind === 'text' ? DEFAULT_TEXT_SIZE : DEFAULT_WIDTH;
   const style = (color ? color + ' ' : '') + (width !== undefined && width !== standard ? 'w' + round(width) + ' ' : '');
   if (kind === 'text') return style + 'T ' + round(x) + ' ' + round(y) + ' ' + encodeURIComponent(text);
@@ -109,6 +123,7 @@ export function textLines(stroke) {
 }
 
 export function strokeBounds(stroke) {
+  if (stroke.kind === 'image') return { minX: stroke.x, minY: stroke.y, maxX: stroke.x + stroke.width, maxY: stroke.y + stroke.height };
   if (stroke.kind === 'text') {
     const lines = stroke.text.split('\n');
     return { minX: stroke.x, minY: stroke.y, maxX: stroke.x + Math.max(1, ...lines.map(line => line.length)) * stroke.width * 0.55, maxY: stroke.y + lines.length * stroke.width * LINE_HEIGHT };
@@ -130,7 +145,7 @@ function segmentDistance(point, a, b) {
 
 // Distance from a point to the drawn edge of a stroke (0 or less: on the ink).
 export function strokeDistance(stroke, point) {
-  if (stroke.kind === 'text') {
+  if (stroke.kind === 'text' || stroke.kind === 'image') {
     const box = strokeBounds(stroke);
     return Math.hypot(Math.max(box.minX - point.x, 0, point.x - box.maxX), Math.max(box.minY - point.y, 0, point.y - box.maxY));
   }
@@ -157,10 +172,10 @@ export function touches(stroke, from, to, radius) {
 }
 
 // Erases only the part of a stroke under the eraser. Returns the remaining
-// pieces as stroke strings, or null if the eraser misses it. Text goes whole.
+// pieces as stroke strings, or null if the eraser misses it. Text and pictures go whole.
 export function eraseFrom(stroke, from, to, radius) {
   if (!touches(stroke, from, to, radius)) return null;
-  if (stroke.kind === 'text' || stroke.points.length < 2) return [];
+  if (stroke.kind === 'text' || stroke.kind === 'image' || stroke.points.length < 2) return [];
   // Long segments (shapes) are split up first, so the eraser cuts where it is.
   const step = Math.max(radius / 2, 0.5), dense = [stroke.points[0]];
   for (let i = 1; i < stroke.points.length; i++) {
@@ -179,7 +194,7 @@ export function eraseFrom(stroke, from, to, radius) {
 }
 
 export function translateStroke(stroke, dx, dy) {
-  if (stroke.kind === 'text') return formatStroke({ ...stroke, x: stroke.x + dx, y: stroke.y + dy });
+  if (stroke.kind === 'text' || stroke.kind === 'image') return formatStroke({ ...stroke, x: stroke.x + dx, y: stroke.y + dy });
   return formatStroke({ ...stroke, points: stroke.points.map(point => ({ ...point, x: point.x + dx, y: point.y + dy })) });
 }
 
@@ -194,10 +209,10 @@ function insidePolygon(point, polygon) {
   return inside;
 }
 
-// A lasso takes strokes with most of their points inside it, and text whose middle is inside.
+// A lasso takes strokes with most of their points inside it, and text and pictures whose middle is inside.
 export function inLasso(stroke, polygon) {
   if (polygon.length < 3) return false;
-  if (stroke.kind === 'text') {
+  if (stroke.kind === 'text' || stroke.kind === 'image') {
     const box = strokeBounds(stroke);
     return insidePolygon({ x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 }, polygon);
   }
@@ -223,10 +238,17 @@ export function shapePoints(shape, a, b) {
 }
 
 // Scales a stroke by `scale` and turns it by `angle` (radians) around (cx, cy).
-// Widths and text sizes scale along; text keeps its upright orientation.
+// Widths and text sizes scale along; text and pictures stay upright, only their middle turns.
 export function transformStroke(stroke, { cx, cy, scale = 1, angle = 0 }) {
   const cos = Math.cos(angle) * scale, sin = Math.sin(angle) * scale;
   const move = point => ({ ...point, x: cx + (point.x - cx) * cos - (point.y - cy) * sin, y: cy + (point.x - cx) * sin + (point.y - cy) * cos });
+  if (stroke.kind === 'image') {
+    const middle = move({ x: stroke.x + stroke.width / 2, y: stroke.y + stroke.height / 2 });
+    // Clamped as a whole, so the aspect ratio survives extreme scaling.
+    const factor = Math.min(20000 / Math.max(stroke.width, stroke.height), Math.max(1 / Math.min(stroke.width, stroke.height), scale));
+    const width = stroke.width * factor, height = stroke.height * factor;
+    return formatStroke({ ...stroke, width, height, x: middle.x - width / 2, y: middle.y - height / 2 });
+  }
   if (stroke.kind === 'text') {
     const box = strokeBounds(stroke), middle = move({ x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 });
     const width = Math.min(400, Math.max(4, stroke.width * scale)), half = { x: (box.maxX - box.minX) / 2 * width / stroke.width, y: (box.maxY - box.minY) / 2 * width / stroke.width };
