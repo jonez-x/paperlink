@@ -33,7 +33,7 @@ const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 class CliError extends Error {}
 
 // ── Arguments ────────────────────────────────────────────────────────────────
-const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start', 'all', 'yes', 'clear']);
+const BOOLEAN_FLAGS = new Set(['lan', 'no-lan', 'json', 'qr', 'no-qr', 'obsidian', 'no-obsidian', 'help', 'version', 'no-start', 'all', 'yes', 'clear', 'literal']);
 const VALUE_FLAGS = new Set(['port', 'title', 'from-browser', 'pdf', 'output', 'page', 'at', 'region', 'width', 'text', 'author', 'revision', 'remove']);
 
 export function parseArguments(argv) {
@@ -635,20 +635,22 @@ async function cmdAnnotate(ctx, positional) {
   if (!canvas) return;
   const document = await readCanvas(canvas.path, canvas.id);
   const existing = document.annotations || [];
+  // Never both: an allowed "annotate --text" must not clear or remove notes.
+  if ((ctx.flags.clear || ctx.flags.remove) && ctx.flags.text !== undefined) throw new CliError('Use --text, --remove or --clear, not several.');
   if (ctx.flags.clear || ctx.flags.remove) {
     const removed = ctx.flags.clear ? existing : existing.filter(note => note.id === ctx.flags.remove || note.id.startsWith(String(ctx.flags.remove)));
     if (!removed.length) throw new CliError(ctx.flags.clear ? 'There are no notes.' : 'No note matches ' + ctx.flags.remove + '. See `paper inspect`.');
     const result = await applyCanvasOps(ctx, canvas, removed.map(note => ({ type: 'removeAnnotation', id: note.id, annotation: note })));
     return emit(ctx, { removed: removed.map(note => note.id), revision: result.revision }, () => ok('Removed ' + removed.length + ' note' + (removed.length === 1 ? '' : 's')));
   }
-  if (!ctx.flags.text) throw new CliError('Use: paper annotate <canvas> --text "…" [--page N] [--at X,Y] [--width W] [--revision R], or --remove <id> / --clear.');
+  if (!ctx.flags.text) throw new CliError('Use: paper annotate <canvas> --text "…" [--page N] [--at X,Y] [--width W] [--revision R] [--literal], or --remove <id> / --clear.');
   const number = pageNumber(ctx, document);
   const [x, y] = ctx.flags.at ? numbers(ctx.flags.at, 2, 'at') : [40, 40];
   const seen = ctx.flags.revision !== undefined ? Number(ctx.flags.revision) : document.revision;
   const annotation = {
     id: randomUUID(), page: document.pages[number - 1].id, x, y,
     ...(ctx.flags.width !== undefined && { width: Number(ctx.flags.width) }),
-    text: String(ctx.flags.text).replace(/\\n/g, '\n'), author: ctx.flags.author || 'Assistant', revision: seen,
+    text: ctx.flags.literal ? String(ctx.flags.text) : String(ctx.flags.text).replace(/\\n/g, '\n'), author: ctx.flags.author || 'Assistant', revision: seen,
     // Written before the writing last changed: shown, but marked.
     ...(seen < (document.inkRevision ?? document.revision) && { stale: true }), createdAt: new Date().toISOString()
   };
@@ -1021,7 +1023,7 @@ function helpText() {
     '  ' + c.bold('For assistants') + c.muted('  · page units: 900 wide, origin top left'),
     command('inspect <canvas>', 'pages, stroke counts, notes, revision'),
     command('snapshot <canvas> [--page N] [--region X,Y,W,H]', 'page as PNG (or --output x.pdf) to read the writing'),
-    command('annotate <canvas> --text "…" [--page N] [--at X,Y]', 'add a note on the assistant layer (--revision R)'),
+    command('annotate <canvas> --text "…" [--page N] [--at X,Y]', 'add a note on the assistant layer (--revision R; --literal keeps \\n as typed)'),
     command('annotate <canvas> --remove <id> | --clear', 'remove notes'),
     command('preview [file|id|title]', 'write Obsidian notes and previews'),
     command('mcp', 'MCP server on stdin/stdout for assistant apps'),

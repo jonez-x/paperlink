@@ -122,6 +122,7 @@ Coordinates are page units: 900 wide, origin at the page's top left.
 paper inspect "Sheet 4" --json                            # pages, stroke counts, notes, revision
 paper snapshot "Sheet 4" --page 2 --region 0,300,900,400  # PNG of that area (--output x.pdf for a PDF)
 paper annotate "Sheet 4" --page 2 --at 520,320 --text "Check the sign here." --revision 12
+paper annotate "Sheet 4" --literal --text="x \neq 2"   # as typed; without --literal \n is a line break
 paper annotate "Sheet 4" --remove <id> | --clear
 ```
 
@@ -150,10 +151,10 @@ paper annotate "Sheet 4" --remove <id> | --clear
 
 Relative canvas paths in `create_canvas` start at the folder the client launches the server in, so prefer absolute paths.
 
-**Ask from the page.** With `paper config set assistant claude` or `codex` (and a server restart) the toolbar gets an ask button: mark a region, optionally type a question, and the assistant runs on the computer and answers with notes. It is off by default. The browser only sends page, region and question; the command is fixed in the config and runs without a shell. One request per canvas runs at a time (5-minute limit); output goes to `assistant.log` in the settings folder.
+**Ask from the page.** With `paper config set assistant claude` or `codex` (and a server restart) the toolbar gets an ask button: mark a region, optionally type a question, and the assistant runs on the computer and answers with notes. It is off by default. The browser only sends page, region and question; the command is fixed in the config and runs without a shell. One request per canvas runs at a time (5 minutes for the whole run); output goes to `assistant.log` in the settings folder.
 
-- `claude`: Claude Code runs the CLI itself and may only use `paper inspect`, `paper snapshot`, `paper annotate` and read the snapshot.
-- `codex`: Paperlink renders the snapshot and runs `codex exec` with it attached, in Codex's read-only sandbox (no writes, no network), without the user's Codex config, rules, web search, apps, plugins, browser or computer use. Codex answers with JSON notes (checked against a schema); Paperlink clamps them to the page and adds them with the author "Codex". Tested with codex-cli 0.157 on macOS.
+- `claude`: Paperlink renders the snapshot into a fresh folder and runs Claude Code there with only the Read and Bash tools, no MCP servers, permission to read that snapshot and to run `paper annotate <canvas> --page <page> --at …` for the asked canvas and page (annotate refuses `--text` together with `--clear` or `--remove`).
+- `codex`: Paperlink renders the snapshot and runs `codex exec` with it attached, in Codex's read-only sandbox (no writes, no network), without the user's Codex config, rules, web search, apps, plugins, browser or computer use. Codex answers with JSON notes (checked against a schema); Paperlink clamps them to the page and adds them with the author "Codex". Tested with codex-cli 0.157 on macOS. Note that the read-only sandbox can still read files on the computer; questions only come from paired devices.
 - Other assistants: `paper config set assistant '["my-agent","--flag","{prompt}"]'`. Paperlink cannot restrict what a custom command does; it gets the same instructions as Claude Code, with the author "Assistant".
 
 Notes live on a separate layer: they never change the handwriting, appear live on every open device, can be hidden and removed one by one (undo brings them back). A note made with a revision older than the canvas is marked as written for an earlier version.

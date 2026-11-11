@@ -415,6 +415,12 @@ test('assistant commands: inspect, snapshots of a region, notes that appear live
       assert.ok((await readFile(png.path)).subarray(1, 4).equals(Buffer.from('PNG')));
     }
 
+    // Literal text keeps "--" and backslashes; --text never combines with --clear.
+    const literal = await paper('annotate', 'Answers', '--literal', '--text=--> x \\neq 2');
+    assert.equal((await paper('inspect', 'Answers')).annotations.find(note => note.id === literal.id).text, '--> x \\neq 2');
+    assert.match(await fails('annotate', 'Answers', '--at', '1,1', '--text', 'x', '--clear'), /not several/);
+    await paper('annotate', 'Answers', '--remove', literal.id);
+
     // Removing by ID prefix, then all.
     assert.deepEqual((await paper('annotate', 'Answers', '--remove', live.id.slice(0, 8))).removed, [live.id]);
     assert.equal((await paper('annotate', 'Answers', '--clear')).removed.length, 2);
@@ -532,6 +538,49 @@ test('codex preset: read-only run with the snapshot attached, JSON notes added b
     const info = await paper('inspect', canvas.id, '--json');
     assert.deepEqual(info.annotations.map(note => [note.text, note.x, note.y, note.author, Boolean(note.stale)]),
       [['Sign error in line 2', 150, 260, 'Codex', false], ['Clamped', 860, 0, 'Codex', false]]);
+  } finally {
+    await paper('stop').catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('claude preset: runs next to the rendered snapshot with only Read and annotate for this page', { skip: process.platform === 'win32' && 'stand-in is a shell script' }, async () => {
+  const { root, env, paper } = await sandbox();
+  const port = '18884';
+  try {
+    await paper('config', 'set', 'port', port);
+    const canvas = await paper('new', 'Claude feedback');
+    const fake = path.join(root, 'fake-bin');
+    await mkdir(fake);
+    // A stand-in `claude`: records its arguments and folder, then answers like the prompt says.
+    await writeFile(path.join(fake, 'claude'), [
+      '#!/bin/sh',
+      'printf "%s\\n" "$PWD" "$@" > "' + path.join(root, 'claude-args.txt') + '"',
+      '[ -s "$PWD/selection.png" ] || exit 3',
+      'exec paper annotate ' + canvas.id + ' --page 1 --at 120,240 --width 320 --revision 0 --author Claude --text "Looks right"'
+    ].join('\n'), { mode: 0o755 });
+    env.PATH = fake + path.delimiter + env.PATH;
+    await paper('config', 'set', 'assistant', 'claude');
+    await paper('start');
+    const base = 'http://127.0.0.1:' + port;
+    const code = (await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1];
+    const { token } = await (await fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json();
+    const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+    const events = fetch(base + '/api/canvases/' + canvas.id + '/events', { headers });
+    assert.equal((await fetch(base + '/api/canvases/' + canvas.id + '/feedback', { method: 'POST', headers, body: JSON.stringify({ page: 1, region: { x: 0, y: 0, width: 450, height: 300 } }) })).status, 202);
+    const reader = (await events).body.getReader();
+    let text = '';
+    while (!/"assistant":"(done|failed)"/.test(text)) text += new TextDecoder().decode((await reader.read()).value);
+    await reader.cancel();
+    assert.match(text, /"assistant":"done"/, text);
+    const recorded = await readFile(path.join(root, 'claude-args.txt'), 'utf8');
+    const [folder, ...args] = recorded.split('\n');
+    assert.match(folder, /snapshots[\\/]run-[a-f0-9]+$/);
+    assert.ok(!existsSync(folder), 'the run folder is removed afterwards');
+    assert.ok(args.includes('Bash(paper annotate ' + canvas.id + ' --page 1 --at *)'));
+    assert.match(recorded, /covers 450×300 page units/);
+    const [note] = (await paper('inspect', canvas.id)).annotations;
+    assert.deepEqual([note.text, note.author, Boolean(note.stale)], ['Looks right', 'Claude', false]);
   } finally {
     await paper('stop').catch(() => {});
     await rm(root, { recursive: true, force: true });
