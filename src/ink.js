@@ -210,7 +210,9 @@ export function shapePoints(shape, a, b) {
   if (shape === 'rectangle') return [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }, a];
   if (shape === 'ellipse') {
     const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, rx = Math.abs(b.x - a.x) / 2, ry = Math.abs(b.y - a.y) / 2;
-    return Array.from({ length: 65 }, (_, i) => ({ x: cx + rx * Math.cos(i / 32 * Math.PI), y: cy + ry * Math.sin(i / 32 * Math.PI) }));
+    // About one point per 4 units of outline, so large circles stay round when zoomed or scaled.
+    const steps = Math.min(360, Math.max(48, Math.ceil(Math.PI * (rx + ry) / 4)));
+    return Array.from({ length: steps + 1 }, (_, i) => ({ x: cx + rx * Math.cos(i / steps * 2 * Math.PI), y: cy + ry * Math.sin(i / steps * 2 * Math.PI) }));
   }
   if (shape === 'arrow') {
     const angle = Math.atan2(b.y - a.y, b.x - a.x), head = Math.min(28, Math.hypot(b.x - a.x, b.y - a.y) / 3);
