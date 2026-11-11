@@ -482,3 +482,50 @@ test('request feedback: a configured assistant runs with page and region, answer
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('codex preset: read-only run with the snapshot attached, JSON notes added by Paperlink', { skip: process.platform === 'win32' && 'stand-in is a shell script' }, async () => {
+  const { root, env, paper } = await sandbox();
+  const port = '18883';
+  try {
+    await paper('config', 'set', 'port', port);
+    const canvas = await paper('new', 'Codex feedback');
+    // A stand-in `codex`: records its arguments, checks the attached image and answers with JSON.
+    const fake = path.join(root, 'fake-bin');
+    await mkdir(fake);
+    await writeFile(path.join(fake, 'codex'), [
+      '#!/bin/sh',
+      'printf "%s\\n" "$@" > "' + path.join(root, 'codex-args.txt') + '"',
+      'while [ $# -gt 0 ]; do case "$1" in --output-last-message) answer="$2"; shift;; --image) image="$2"; shift;; esac; shift; done',
+      '[ -s "$image" ] || exit 3',
+      'printf \'{"notes":[{"x":150,"y":260,"text":"Sign error in line 2"},{"x":99999,"y":-5,"text":"Clamped"},{"x":1,"y":1,"text":"  "}]}\' > "$answer"'
+    ].join('\n'), { mode: 0o755 });
+    env.PATH = fake + path.delimiter + env.PATH;
+    await paper('config', 'set', 'assistant', 'codex');
+    await paper('start');
+    const base = 'http://127.0.0.1:' + port;
+    const code = (await paper('pair')).links[0].match(/#pair=([a-f0-9]+)/)[1];
+    const { token } = await (await fetch(base + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json();
+    const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+    const events = fetch(base + '/api/canvases/' + canvas.id + '/events', { headers });
+    const response = await fetch(base + '/api/canvases/' + canvas.id + '/feedback', { method: 'POST', headers, body: JSON.stringify({ page: 1, region: { x: 100, y: 200, width: 300, height: 150 }, question: 'Richtig?' }) });
+    assert.equal(response.status, 202);
+    const reader = (await events).body.getReader();
+    let text = '';
+    while (!/"assistant":"(done|failed)"/.test(text)) text += new TextDecoder().decode((await reader.read()).value);
+    await reader.cancel();
+    assert.match(text, /"assistant":"done"/, text);
+
+    // One argument per line; the prompt spans several.
+    const recorded = await readFile(path.join(root, 'codex-args.txt'), 'utf8');
+    const args = recorded.split('\n');
+    for (const flag of ['exec', '--sandbox', 'read-only', '--ignore-user-config', '--ephemeral', '--output-schema', '--image']) assert.ok(args.includes(flag), flag);
+    assert.match(recorded, /"""Richtig\?"""/);
+    assert.match(recorded, /top left corner is page point \(100, 200\)/);
+    const info = await paper('inspect', canvas.id, '--json');
+    assert.deepEqual(info.annotations.map(note => [note.text, note.x, note.y, note.author, Boolean(note.stale)]),
+      [['Sign error in line 2', 150, 260, 'Codex', false], ['Clamped', 860, 0, 'Codex', false]]);
+  } finally {
+    await paper('stop').catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -6,7 +6,7 @@ import path from 'node:path';
 // `obsidian` adds a note and preview next to canvases that sit inside a vault.
 export const DEFAULTS = Object.freeze({
   obsidian: true,
-  assistant: null, // "Request feedback" from a page: 'claude' or a custom command (see assistant.js)
+  assistant: null, // "Request feedback" from a page: 'claude', 'codex' or a custom command (see assistant.js)
   port: 8080,
   lan: false
 });

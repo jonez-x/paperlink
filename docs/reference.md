@@ -33,7 +33,7 @@ paper config
 paper config set lan true         # iPad and other devices may connect
 paper config set obsidian false   # no notes next to canvases in vaults
 paper config set port 8080
-paper config set assistant claude # ask button on the page, see Assistants
+paper config set assistant claude # ask button on the page (claude, codex or off), see Assistants
 ```
 
 Never run `paper` with `sudo`: files in the settings folder would then belong to root and the server could no longer read them.
@@ -138,7 +138,7 @@ paper annotate "Sheet 4" --remove <id> | --clear
 | `remove_notes` | One note by ID, or all |
 | `export_pdf` | PDF with the handwriting for handing in |
 
-`paper setup` registers the server in Claude Desktop (`claude_desktop_config.json`, other entries kept; a file that is not valid JSON is left alone), Claude Code (`claude mcp add --scope user`) and Cursor (`~/.cursor/mcp.json`), with the absolute paths of the running Node and `paper.js`. By hand, Claude Code: `claude mcp add paperlink -- paper mcp`. Claude Desktop and other clients (`claude_desktop_config.json`); using `node` with the full path works on every system, including Windows, where `paper` is a `.cmd` wrapper:
+`paper setup` registers the server in Claude Desktop (`claude_desktop_config.json`, other entries kept; a file that is not valid JSON is left alone), Claude Code (`claude mcp add --scope user`), Codex (`codex mcp add`) and Cursor (`~/.cursor/mcp.json`), with the absolute paths of the running Node and `paper.js`. By hand, Claude Code: `claude mcp add paperlink -- paper mcp`. Claude Desktop and other clients (`claude_desktop_config.json`); using `node` with the full path works on every system, including Windows, where `paper` is a `.cmd` wrapper:
 
 ```json
 {
@@ -150,7 +150,11 @@ paper annotate "Sheet 4" --remove <id> | --clear
 
 Relative canvas paths in `create_canvas` start at the folder the client launches the server in, so prefer absolute paths.
 
-**Ask from the page.** With `paper config set assistant claude` (and a server restart) the toolbar gets an ask button: mark a region, optionally type a question, and Claude Code runs on the computer and answers with notes. It is off by default. The browser only sends page, region and question; the command is fixed in the config, runs without a shell, and Claude may only use `paper inspect`, `paper snapshot`, `paper annotate` and read the snapshot. One request per canvas runs at a time (5-minute limit); output goes to `assistant.log` in the settings folder. Other assistants: `paper config set assistant '["my-agent","--flag","{prompt}"]'`.
+**Ask from the page.** With `paper config set assistant claude` or `codex` (and a server restart) the toolbar gets an ask button: mark a region, optionally type a question, and the assistant runs on the computer and answers with notes. It is off by default. The browser only sends page, region and question; the command is fixed in the config and runs without a shell. One request per canvas runs at a time (5-minute limit); output goes to `assistant.log` in the settings folder.
+
+- `claude`: Claude Code runs the CLI itself and may only use `paper inspect`, `paper snapshot`, `paper annotate` and read the snapshot.
+- `codex`: Paperlink renders the snapshot and runs `codex exec` with it attached, in Codex's read-only sandbox (no writes, no network), without the user's Codex config, rules, web search, apps, plugins, browser or computer use. Codex answers with JSON notes (checked against a schema); Paperlink clamps them to the page and adds them with the author "Codex". Tested with codex-cli 0.157 on macOS.
+- Other assistants: `paper config set assistant '["my-agent","--flag","{prompt}"]'`. Paperlink cannot restrict what a custom command does; it gets the same instructions as Claude Code, with the author "Assistant".
 
 Notes live on a separate layer: they never change the handwriting, appear live on every open device, can be hidden and removed one by one (undo brings them back). A note made with a revision older than the canvas is marked as written for an earlier version.
 
@@ -177,6 +181,6 @@ Paperlink is developed on macOS. CI runs the tests on macOS, Windows and Linux.
 | Delete | Trash | Recycle Bin (PowerShell) | `~/.local/share/Trash/files` |
 | PNG snapshots | Quick Look | Windows PDF engine (Windows 10+, PowerShell 5.1) | `pdftoppm` (poppler-utils) |
 | Open / copy link | `open`, `pbcopy` | `rundll32`, `clip` | `xdg-open`, `xclip` |
-| Ask button | `claude` on the PATH | `claude.exe` on the PATH (native installer; npm's `.cmd` wrapper cannot run without a shell) | `claude` on the PATH |
+| Ask button | `claude` or `codex` on the PATH | `claude.exe` or `codex.exe` on the PATH (npm's `.cmd` wrappers cannot run without a shell; Codex not tested on Windows) | `claude` or `codex` on the PATH (Codex not tested on Linux) |
 
 On Windows, allow Node.js through the firewall for private networks when it asks, otherwise the iPad cannot connect. If the iPad cannot resolve `<Name>.local`, set `PAPERLINK_HOST` to the computer's IP address.

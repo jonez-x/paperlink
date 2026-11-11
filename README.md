@@ -46,7 +46,7 @@ To let the iPad connect, allow network access once: `paper config set lan true`.
 
 ## Assistants
 
-Claude and other assistants can read a page and leave notes next to your writing. `paper setup` connects the ones it finds (Claude Desktop, Claude Code, Cursor). By hand:
+Claude and other assistants can read a page and leave notes next to your writing. `paper setup` connects the ones it finds (Claude Desktop, Claude Code, Codex, Cursor) and can add an Ask button to the page that Claude Code or Codex answers. By hand:
 
 ```sh
 claude mcp add paperlink -- paper mcp

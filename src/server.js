@@ -11,7 +11,7 @@ import { DraftStore } from './drafts.js';
 import { backgroundDirectory, backgroundPath, findNote, writeObsidianFiles, writePreview } from './preview.js';
 import { validPdfName } from './pdf.js';
 import { exportPdf } from './export.js';
-import { feedbackPrompt, runAssistant, validAssistant } from './assistant.js';
+import { runAssistant, validAssistant } from './assistant.js';
 import { loadRegistry, relocate } from './registry.js';
 import { findMoved, followNote, moveCanvas } from './move.js';
 import { stateDirectory } from './config.js';
@@ -369,7 +369,7 @@ export async function serve({ port, lan, obsidian = true, assistant = null }) {
       const feedbackMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/feedback$/.exec(req.url);
       if (feedbackMatch && req.method === 'POST') {
         const [, id] = feedbackMatch;
-        if (!assistant || !validAssistant(assistant)) throw httpError(409, 'No assistant is set up. On the computer run `paper config set assistant claude` and restart Paperlink.');
+        if (!assistant || !validAssistant(assistant)) throw httpError(409, 'No assistant is set up. On the computer run `paper config set assistant claude` (or codex) and restart Paperlink.');
         if (assistantRuns.has(id)) throw httpError(429, 'The assistant is still working on this canvas.');
         const input = await body(req);
         const file = await locate(id);
@@ -383,7 +383,7 @@ export async function serve({ port, lan, obsidian = true, assistant = null }) {
         broadcast(id, { assistant: 'started' });
         await runAssistant({
           setting: assistant, port,
-          prompt: feedbackPrompt({ document, page, region, question: input.question?.trim() || '' }),
+          request: { document, page, region, question: input.question?.trim() || '' },
           onExit: ({ ok, message }) => { assistantRuns.delete(id); broadcast(id, { assistant: ok ? 'done' : 'failed', message }); }
         }).catch(error => { assistantRuns.delete(id); throw error; });
         return json(res, 202, { started: true });

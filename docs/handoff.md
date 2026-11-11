@@ -200,3 +200,10 @@ Record completed work, exact checks and limitations at each milestone. Update th
 - Windows: settings in %APPDATA%, Recycle Bin via PowerShell, PNG snapshots via the WinRT PDF API (src/raster.js), `rundll32`/`clip` for the open-link menu, hidden console for the background server, `paper.cmd` shim for the assistant. Linux snapshots use pdftoppm. None of this has run on a real Windows machine yet; CI (.github/workflows/test.yml) runs the tests on Windows, but the PowerShell snapshot and Recycle Bin paths are not covered by tests.
 - `paper open` in a terminal shows only the QR code plus **Open canvas** / **Copy link** instead of printing links.
 - README holds only install and basic use; everything technical moved to docs/reference.md.
+
+## Assistant presets (2026-11-11, Claude Code, branch feature/assistant-presets on top of feature/installer)
+
+- `assistant` accepts `codex` besides `claude` and custom lists (src/assistant.js `PRESETS`). Codex runs `codex exec` in its read-only sandbox with `--ignore-user-config`, `--ignore-rules`, web search off and apps, plugins, browser/computer use, multi-agent and hooks disabled; Paperlink renders the snapshot first, attaches it with `--image`, and turns the schema-checked JSON answer into notes (author "Codex", clamped to the page, revision counted per note so its own notes are not marked stale). Claude's prompt now uses its preset author.
+- Settings in `paper` pick Claude Code, Codex, a kept custom command or off; `paper setup` detects Codex, registers the MCP server with `codex mcp add` and offers whichever Ask presets it found.
+- Verified: npm test (31 tests; stand-in `codex` checks flags, prompt, attached image, clamping). Real codex-cli 0.157 on macOS against a sandbox server: two correct German notes in about 10 s; asked about its tools, the locked-down Codex reported no web or browser tools. Not verified: `paper setup` with Codex in a pty, `codex mcp add` registration, Codex on Windows/Linux, the Ask button from the iPad.
+- Known: with Claude, every note after the first is marked stale, because the prompt gives all notes the same revision.

@@ -16,7 +16,7 @@ import { forget, loadRegistry, relocate, remember } from './registry.js';
 import { deleteCanvas, findMoved, moveCanvas } from './move.js';
 import { canvasLink, loadDevices, saveDevices } from './devices.js';
 import { defaultExportPath, exportPdf } from './export.js';
-import { validAssistant } from './assistant.js';
+import { assistantName, PRESETS, validAssistant } from './assistant.js';
 import { readCanvas, saveOperations, validAnnotation } from './store.js';
 import { writeObsidianFiles } from './preview.js';
 import { parseStroke } from './ink.js';
@@ -403,12 +403,12 @@ async function cmdConfig(ctx, positional) {
   if (action !== 'set' || !key || !rest.length) throw new CliError('Use `paper config`, or `paper config set <obsidian|lan|port|assistant> <value>`.');
   const value = rest.join(' ');
   const parseBoolean = text => { if (/^(true|on|yes|1)$/i.test(text)) return true; if (/^(false|off|no|0)$/i.test(text)) return false; throw new CliError(key + ' must be true or false.'); };
-  // assistant: claude, off, or a JSON argument list with "{prompt}", e.g. ["my-agent","--ask","{prompt}"].
+  // assistant: claude, codex, off, or a JSON argument list with "{prompt}", e.g. ["my-agent","--ask","{prompt}"].
   const parseAssistant = text => {
     if (/^(off|none|false|no)$/i.test(text)) return null;
     let setting = text;
     if (text.trim().startsWith('[')) { try { setting = JSON.parse(text); } catch { throw new CliError('The custom assistant must be a JSON list such as ["my-agent","{prompt}"].'); } }
-    if (!validAssistant(setting)) throw new CliError('Use `claude`, `off`, or a JSON list containing "{prompt}".');
+    if (!validAssistant(setting)) throw new CliError('Use `claude`, `codex`, `off`, or a JSON list containing "{prompt}".');
     return setting;
   };
   const update = { obsidian: parseBoolean, lan: parseBoolean, port: validPort, assistant: parseAssistant }[key];
@@ -901,7 +901,7 @@ async function settings(ctx, status) {
         { label: 'Obsidian notes', value: 'obsidian', hint: config.obsidian ? 'on · for canvases inside a vault' : 'off' },
         { label: 'iPad & network access', value: 'lan', hint: config.lan ? 'on' : 'off · this computer only' },
         { label: 'Port', value: 'port', hint: String(config.port) },
-        { label: 'Assistant', value: 'assistant', hint: config.assistant === 'claude' ? 'Claude Code answers "Ask"' : config.assistant ? 'custom command' : 'off' },
+        { label: 'Assistant', value: 'assistant', hint: PRESETS[config.assistant] ? assistantName(config.assistant) + ' answers "Ask"' : assistantName(config.assistant) },
         { label: 'Paired devices', value: 'devices', hint: 'list and unpair' },
         { separator: '' },
         { label: 'Back', value: 'back' }
@@ -918,9 +918,18 @@ async function settings(ctx, status) {
     let value;
     if (choice === 'obsidian') value = await ui.confirm({ message: 'Add a note and preview to canvases inside an Obsidian vault?', initial: config.obsidian });
     if (choice === 'assistant') {
-      const enable = await ui.confirm({ message: 'Let Claude Code answer "Ask" from a page with notes? It runs on this computer and only gets Paperlink commands.', initial: Boolean(config.assistant) });
-      if (enable !== null) value = enable ? (Array.isArray(config.assistant) ? config.assistant : 'claude') : null;
-      if (enable === null) continue;
+      const picked = await ui.select({
+        message: 'Who answers "Ask" from a page? It runs on this computer and answers with notes.',
+        initialValue: Array.isArray(config.assistant) ? 'custom' : config.assistant ?? 'off',
+        choices: [
+          { label: 'Claude Code', value: 'claude', hint: 'only gets the Paperlink commands' },
+          { label: 'Codex', value: 'codex', hint: 'read-only, no network; gets the snapshot' },
+          ...(Array.isArray(config.assistant) ? [{ label: 'Keep the custom command', value: 'custom', hint: JSON.stringify(config.assistant) }] : []),
+          { label: 'Off', value: 'off' }
+        ]
+      });
+      if (!picked) continue;
+      value = picked === 'off' ? null : picked === 'custom' ? config.assistant : picked;
     }
     if (choice === 'lan') value = await ui.confirm({ message: 'Allow your iPad and other devices on this Wi-Fi to connect?', initial: config.lan });
     if (choice === 'port') {
@@ -966,9 +975,13 @@ async function cmdSetup(ctx) {
         try { await app.connect(); console.log(ok(app.name + ' connected' + (app.note ? c.muted(' · ' + app.note) : ''))); }
         catch (error) { console.log('  ' + c.danger('✗ ' + app.name + ': ' + error.message)); }
       }
-      if (apps.some(app => app.id === 'claude-code') && !config.assistant) {
-        const ask = await ui.confirm({ message: 'Also add an "Ask" button to the page that Claude Code answers with notes?', initial: true });
-        if (ask) config = await saveConfig({ ...config, assistant: 'claude' });
+      // Presets for the "Ask" button, in the order apps were found.
+      const presets = apps.map(app => ({ 'claude-code': 'claude', codex: 'codex' })[app.id]).filter(Boolean);
+      if (presets.length && !config.assistant) {
+        const ask = presets.length === 1
+          ? await ui.confirm({ message: 'Also add an "Ask" button to the page that ' + assistantName(presets[0]) + ' answers with notes?', initial: true }).then(yes => yes ? presets[0] : null)
+          : await ui.select({ message: 'Also add an "Ask" button to the page? Who answers it with notes?', choices: [...presets.map(value => ({ label: assistantName(value), value })), { label: 'No Ask button', value: 'off' }] });
+        if (ask && ask !== 'off') config = await saveConfig({ ...config, assistant: ask });
       }
     }
   }
@@ -1029,7 +1042,7 @@ function helpText() {
     '  ' + c.bold('Settings'),
     command('setup', 'guided setup: iPad, AI assistants, first canvas'),
     command('config', 'show settings'),
-    command('config set <key> <value>', 'obsidian, lan, port, assistant (claude|off)'),
+    command('config set <key> <value>', 'obsidian, lan, port, assistant (claude|codex|off)'),
     '',
     '  ' + c.bold('Options'),
     command('--port <n>', 'server port (default from config, 8080)'),

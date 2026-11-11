@@ -54,6 +54,16 @@ export async function assistantApps() {
       }
     });
   }
+  if ((await run('codex', ['--version'])).ok) {
+    apps.push({
+      id: 'codex', name: 'Codex', connect: async () => {
+        const { command, args } = mcpServer();
+        await run('codex', ['mcp', 'remove', 'paperlink']);
+        const added = await run('codex', ['mcp', 'add', 'paperlink', '--', command, ...args]);
+        if (!added.ok) throw new Error('codex mcp add failed: ' + added.output);
+      }
+    });
+  }
   const cursor = path.join(homedir(), '.cursor');
   if (existsSync(cursor)) apps.push({ id: 'cursor', name: 'Cursor', connect: () => addToConfigFile(path.join(cursor, 'mcp.json')) });
   return apps;
