@@ -1056,9 +1056,15 @@ function hasTransparency(context, width, height) {
 async function preparePicture(file) {
   const source = URL.createObjectURL(file);
   try {
+    // onload rather than decode(): decode() can stay pending in some WebKit and
+    // background states, and a picture must never leave the insert hanging.
     const image = new Image();
-    image.src = source;
-    await image.decode().catch(() => { throw new Error('This picture could not be read. Try a JPEG or PNG.'); });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Reading the picture took too long.')), 20000);
+      image.onload = () => { clearTimeout(timer); resolve(); };
+      image.onerror = () => { clearTimeout(timer); reject(new Error('This picture could not be read. Try a JPEG or PNG.')); };
+      image.src = source;
+    });
     const factor = Math.min(1, PICTURE_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
     const width = Math.max(1, Math.round(image.naturalWidth * factor)), height = Math.max(1, Math.round(image.naturalHeight * factor));
     const canvas = Object.assign(document.createElement('canvas'), { width, height });
@@ -1071,7 +1077,8 @@ async function preparePicture(file) {
       context.fillStyle = '#ffffff';
       context.fillRect(0, 0, width, height);
     }
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, png ? 'image/png' : 'image/jpeg', 0.85));
+    const blob = await Promise.race([new Promise(resolve => canvas.toBlob(resolve, png ? 'image/png' : 'image/jpeg', 0.85)),
+      new Promise(resolve => setTimeout(() => resolve(null), 20000))]);
     canvas.width = canvas.height = 0; // frees the bitmap right away on iOS
     if (!blob) throw new Error('This picture could not be prepared.');
     return { blob, width, height };
