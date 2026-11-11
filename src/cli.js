@@ -649,8 +649,8 @@ async function cmdAnnotate(ctx, positional) {
     id: randomUUID(), page: document.pages[number - 1].id, x, y,
     ...(ctx.flags.width !== undefined && { width: Number(ctx.flags.width) }),
     text: String(ctx.flags.text).replace(/\\n/g, '\n'), author: ctx.flags.author || 'Assistant', revision: seen,
-    // Written for an older state of the page: shown, but marked.
-    ...(seen !== document.revision && { stale: true }), createdAt: new Date().toISOString()
+    // Written before the writing last changed: shown, but marked.
+    ...(seen < (document.inkRevision ?? document.revision) && { stale: true }), createdAt: new Date().toISOString()
   };
   if (!validAnnotation(annotation)) throw new CliError('Invalid note: text up to 4000 characters, width 40–2000, coordinates in page units.');
   const result = await applyCanvasOps(ctx, canvas, [{ type: 'addAnnotation', annotation }]);

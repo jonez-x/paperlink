@@ -41,6 +41,7 @@ export async function readCanvas(file, id) {
   try { validatePages(document.pages); }
   catch { throw new Error('Unsupported document format: invalid pages.'); }
   if (document.pdf !== undefined && !validPdfName(document.pdf?.file)) throw new Error('Unsupported document format: invalid PDF reference.');
+  if (document.inkRevision !== undefined && !(Number.isInteger(document.inkRevision) && document.inkRevision <= document.revision)) delete document.inkRevision;
   if (document.annotations !== undefined && (!Array.isArray(document.annotations) || !document.annotations.every(validAnnotation))) throw new Error('Unsupported document format: invalid annotations.');
   return document;
 }
@@ -81,9 +82,14 @@ function receiptFor(document, request) {
   return { hash, receipt };
 }
 
-async function commit(file, document, operationId, hash) {
+// `inkRevision` is the last revision that changed pages or strokes, so notes
+// only count as stale when the writing changed, not when other notes arrived.
+async function commit(file, document, operationId, hash, { ink = true } = {}) {
   document.version = 2;
+  // Files from before inkRevision: assume the writing changed last.
+  if (!ink) document.inkRevision ??= document.revision;
   document.revision++;
+  if (ink) document.inkRevision = document.revision;
   document.updatedAt = new Date().toISOString();
   document.receipts = [...(document.receipts || []), { id: operationId, hash, revision: document.revision }].slice(-200);
   const temporary = file + '.' + operationId + '.tmp';
@@ -112,7 +118,7 @@ export async function saveCanvas(file, id, request) {
 
 // Annotations: notes from an assistant (or the CLI) on a separate layer, in
 // page coordinates. They never touch the handwriting. `revision` is the canvas
-// revision the author looked at; `stale` marks notes made on an older state.
+// revision the author looked at; `stale` marks notes made before the writing last changed.
 export function validAnnotation(note) {
   return note && typeof note === 'object' && PAGE_ID.test(note.id ?? '') && PAGE_ID.test(note.page ?? '') &&
     Number.isFinite(note.x) && Number.isFinite(note.y) && Math.abs(note.x) < 20000 && Math.abs(note.y) < 20000 &&
@@ -176,5 +182,5 @@ export async function saveOperations(file, id, request) {
   document.annotations ??= [];
   applyOperations(document.pages, request.ops, document.annotations);
   if (!document.annotations.length) delete document.annotations;
-  return commit(file, document, request.operationId, hash);
+  return commit(file, document, request.operationId, hash, { ink: request.ops.some(op => !/Annotation$/.test(op.type)) });
 }

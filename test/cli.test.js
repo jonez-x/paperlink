@@ -382,6 +382,14 @@ test('assistant commands: inspect, snapshots of a region, notes that appear live
     const reader = response.body.getReader();
     const next = async () => { let text = ''; while (!text.includes('\n\n')) text += new TextDecoder().decode((await reader.read()).value); return JSON.parse(text.slice(6, text.indexOf('\n\n'))); };
     assert.equal((await next()).live, true);
+    // Other notes since --revision do not make a note stale; changed writing does.
+    const fresh = await paper('annotate', canvas.id, '--text', 'Second note', '--revision', '0');
+    assert.equal(fresh.stale, false);
+    assert.equal((await next()).ops[0].annotation.text, 'Second note');
+    const page = (await paper('inspect', canvas.id)).pages[0].id;
+    await fetch(base + '/api/canvases/' + canvas.id + '/ops', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operationId: 'ink-1', ops: [{ type: 'add', page, stroke: 'M 10 10 l 0.01 0 L 50 50' }] }) });
+    assert.ok((await next()).ops);
     const live = await paper('annotate', canvas.id, '--text', 'Nice!\\nNow simplify.', '--revision', '0', '--author', 'Claude');
     assert.equal(live.stale, true);
     const event = await next();
@@ -390,7 +398,7 @@ test('assistant commands: inspect, snapshots of a region, notes that appear live
     assert.equal(event.ops[0].annotation.author, 'Claude');
     await reader.cancel();
     info = await paper('inspect', canvas.id);
-    assert.equal(info.annotations.length, 2);
+    assert.equal(info.annotations.length, 3);
 
     // Snapshots: a region of a page as PDF (exact size) and as PNG on macOS.
     const pdf = await paper('snapshot', 'Answers', '--region', '0,0,450,300', '--output', path.join(root, 'region.pdf'));
@@ -409,7 +417,7 @@ test('assistant commands: inspect, snapshots of a region, notes that appear live
 
     // Removing by ID prefix, then all.
     assert.deepEqual((await paper('annotate', 'Answers', '--remove', live.id.slice(0, 8))).removed, [live.id]);
-    assert.equal((await paper('annotate', 'Answers', '--clear')).removed.length, 1);
+    assert.equal((await paper('annotate', 'Answers', '--clear')).removed.length, 2);
     assert.deepEqual((await paper('inspect', 'Answers')).annotations, []);
     assert.match(await fails('annotate', 'Answers', '--clear'), /no notes/);
   } finally {

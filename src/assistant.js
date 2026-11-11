@@ -177,11 +177,9 @@ export async function runAssistant({ setting, request, port, onExit }) {
       if (code !== 0) throw new Error(stopped('Codex') + code + '. See ' + logFile + '.');
       const notes = parseAnswer(await readFile(files.answer, 'utf8').catch(() => ''), document.pages[page - 1]);
       await log.write(notes.length + ' note(s)\n');
-      // Each note raises the revision, so the next one counts it as seen;
-      // edits by anyone else in the meantime still mark the notes as stale.
-      for (const [index, note] of notes.entries()) {
+      for (const note of notes) {
         const added = await paper(['annotate', document.id, '--page', String(page), '--at', note.x + ',' + note.y, '--width', '320',
-          '--revision', String(document.revision + index), '--author', PRESETS.codex.author, '--text', note.text]);
+          '--revision', String(document.revision), '--author', PRESETS.codex.author, '--text', note.text]);
         if (added !== 0) throw new Error('Could not add a note. See ' + logFile + '.');
       }
     } finally { await rm(work, { recursive: true, force: true }); }
