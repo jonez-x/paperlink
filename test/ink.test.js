@@ -24,7 +24,10 @@ test('stroke strings: old strokes stay valid, styles and kinds round-trip', () =
   assert.equal(text, '#e0453a w36 T 5 6 x%C2%B2%20%3D%204%0A%C3%BCber%20100%25');
   assert.equal(parseStroke(text).text, 'x² = 4\nüber 100%');
   assert.deepEqual(textLines(parseStroke(text)).map(line => line.y), [6 + 36 * 0.9, 6 + 36 * 2.15]);
-  for (const bad of ['', 'M 1 2', 'w0 M 1 2 l 0.01 0', '#fff M 1 2 l 0.01 0', 'V 1 2', 'V 1 2 3', 'T 1 2 ', 'T 1 2 %E0', 'h T 1 2 a', 'M 1 2 l 0.01 0 <x>']) {
+  // Pictures (more in images.test.js): no style prefixes, strict asset names.
+  const picture = 'I 10 20 300 200 0123456789abcdef.jpg';
+  assert.equal(formatStroke(parseStroke(picture)), picture);
+  for (const bad of ['', 'M 1 2', 'w0 M 1 2 l 0.01 0', '#fff M 1 2 l 0.01 0', 'V 1 2', 'V 1 2 3', 'T 1 2 ', 'T 1 2 %E0', 'h T 1 2 a', 'M 1 2 l 0.01 0 <x>', 'I 1 2 3 4 ../a.jpg', '#e0453a ' + picture]) {
     assert.equal(validStroke(bad), false, bad);
   }
 });

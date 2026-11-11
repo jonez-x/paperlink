@@ -46,7 +46,9 @@ Saves use revision checks and atomic replacement. Pending edits survive reloads;
 
 A lock in the per-user temp directory (never next to your files) prevents a second server from writing the same canvases. Locks left by crashed processes are replaced automatically.
 
-Deleting moves canvas, note, preview and a copied PDF to the system trash (macOS Trash, Windows Recycle Bin, `~/.local/share/Trash/files` on Linux), so it can be undone.
+Pictures inserted on pages live in a folder `<Name>.assets` next to the canvas, created with the first picture. Each file is named after its content (16 hex digits of its SHA-256 plus `.jpg` or `.png`), so the same picture is stored once and a stroke never points at changed bytes. Removing a picture from a page leaves its file in the folder (undo and other devices may still need it).
+
+Deleting moves canvas, note, preview, the pictures folder and a copied PDF to the system trash (macOS Trash, Windows Recycle Bin, `~/.local/share/Trash/files` on Linux), so it can be undone.
 
 ## PDF worksheets
 
@@ -64,6 +66,9 @@ PDF pages keep their original look in both themes and are re-rendered sharply wh
 | Lasso | L | – select strokes on one page, then drag inside the box to move; the bar above recolours, duplicates or deletes (Delete key) |
 | Shapes | S | line, arrow, rectangle or ellipse, with the pen's colour and width |
 | Text | T | colour and size; tap to type, tap existing text to edit it, Esc cancels |
+| Insert image | – | – opens the picture picker (on the iPad: Photos, camera or Files); pasting a picture works too |
+
+Inserting a picture needs a canvas opened from the computer, not a browser-only draft. The browser scales it down to at most 2400 pixels on the long side and sends it as JPEG (quality 0.85); a PNG of up to 4 MB with transparency stays PNG. It lands centred in the visible part of the current page, at most 70% of the page wide and high, and is selected with the lasso, so it can be moved, scaled and turned (it stays upright; only its position turns) right away. Pictures lie below highlighters and ink. Either eraser removes a picture whole, like text.
 
 ⌘/Ctrl+Z undoes, ⇧⌘/Ctrl+Shift+Z redoes. Tool settings are kept per browser. Pressure is used only for Apple Pencil (pointer type pen); mouse strokes keep a constant width.
 
@@ -73,13 +78,16 @@ Every stroke is one string in a page's `strokes` array, so it is its own identit
 
 - `M x y l 0.01 0 L x y …`: a line of constant width (the only form in older files, which stay valid),
 - `V x y p x y p …`: a pressure stroke, `p` from 0 to 1; drawn as a filled outline,
-- `T x y <text>`: text with its top left at x y, URI-encoded.
+- `T x y <text>`: text with its top left at x y, URI-encoded,
+- `I x y w h <asset>`: a picture with its top left at x y, `w` × `h` page units, showing the file `<asset>` from the canvas's `.assets` folder. Pictures take no prefixes; `<asset>` must be 16 lowercase hex digits plus `.jpg` or `.png` (the file need not exist for the stroke to be valid).
 
-`src/ink.js` parses, validates and draws all three for the server, exports, previews and the browser (served at `/ink.js`). `paper inspect` lists typed text per page. A page is only removed while it has no strokes, so undoing "add page" on one device never deletes another device's writing.
+`src/ink.js` parses, validates and draws all of them for the server, exports, previews and the browser (served at `/ink.js`). `paper inspect` lists typed text and the number of pictures per page.
+
+Pictures reach devices through `POST /api/canvases/<id>/assets` (the raw PNG or JPEG body with its `Content-Type`, at most 15 MB; the type must match the file's signature; answers `{ "asset": "<name>" }`, the same name for the same bytes) and `GET /api/canvases/<id>/assets/<asset>` (served with a one-year private cache). Both need a paired device like every other canvas route; names other than the strict asset form are refused. A page is only removed while it has no strokes, so undoing "add page" on one device never deletes another device's writing.
 
 ## Exporting
 
-**Export PDF** in the browser's info popover downloads the PDF. `paper export <canvas>` writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and the handwriting is drawn on top as vectors in its colours, highlighters translucent below it. Text becomes real PDF text in Helvetica; characters outside its Latin set are replaced with "?". Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.
+**Export PDF** in the browser's info popover downloads the PDF. `paper export <canvas>` writes `<Name> (annotated).pdf` next to the canvas; `--output` chooses another file or folder. PDF pages are copied unchanged, including rotation and crop, and the handwriting is drawn on top as vectors in its colours, highlighters translucent below it. Text becomes real PDF text in Helvetica; characters outside its Latin set are replaced with "?". Pictures are embedded as they are stored (JPEG or PNG) below the ink, upright as on screen, also on rotated PDF pages; a picture whose file is missing is left out. Blank pages become white A4 pages. The export uses [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 (MIT), bundled in `vendor/pdf-lib`.
 
 ## Several devices at once
 
@@ -98,7 +106,7 @@ The prototype uses HTTP: use it only on a trusted network. `--qr` forces and `--
 
 ## Moving canvases
 
-`paper move <canvas> <folder/>` moves, `paper move <canvas> <new path>` renames. The note moves along, and a running server switches over without losing a save. Moves made elsewhere are caught too:
+`paper move <canvas> <folder/>` moves, `paper move <canvas> <new path>` renames. The note and the pictures folder move along (renamed with the canvas), and a running server switches over without losing a save. Moves made elsewhere are caught too:
 
 - **File manager or sync:** a canvas missing from its place is searched for by ID, anywhere in its Obsidian vault, or otherwise near its old folder. If it cannot be found, `paper list` marks it as missing; `paper open "<new path>"` reconnects it.
 - **Obsidian:** Obsidian does not show `.paperlink` files, so moving a note leaves the canvas behind. On the next save the server moves the canvas next to the note.
@@ -108,7 +116,7 @@ The prototype uses HTTP: use it only on a trusted network. `--qr` forces and `--
 Canvases inside an Obsidian vault (any folder below one with `.obsidian`) get two companions:
 
 - `<Name>.md`, a note that embeds the handwriting and links to the canvas. It is created once and then belongs to you; Paperlink never rewrites it.
-- `Paperlink Previews/<id>.svg` at the vault root, the handwriting on light paper, refreshed about 1.5 seconds after the last save.
+- `Paperlink Previews/<id>.svg` at the vault root, the handwriting on light paper, refreshed about 1.5 seconds after the last save. Pictures appear as light placeholders labelled "Image": Obsidian embeds the SVG as an image, and an SVG shown as an image loads no linked files, while embedding the photos would make every preview as large as they are.
 
 `paper preview` creates previews and missing notes for known canvases inside vaults (all, or `paper preview <file|id|title>`).
 

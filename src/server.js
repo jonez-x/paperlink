@@ -1,10 +1,11 @@
 import http from 'node:http';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
-import { createCanvas, EXTENSION, isCanvasFile, obsidianVault } from './documents.js';
+import { assetDirectory, createCanvas, EXTENSION, isCanvasFile, obsidianVault } from './documents.js';
+import { validAssetName } from './ink.js';
 import { readCanvas, saveCanvas, saveOperations, validateStrokes } from './store.js';
 import { acquireFolderLock } from './lock.js';
 import { DraftStore } from './drafts.js';
@@ -28,6 +29,26 @@ export function lanAddresses() {
 }
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+// Picture uploads: the declared type must match the file's own signature.
+const IMAGE_TYPES = { 'image/png': '.png', 'image/jpeg': '.jpg' };
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+export function imageType(bytes) {
+  if (bytes.length > 8 && bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return '.png';
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return '.jpg';
+  return null;
+}
+// Written to a temporary name first, so a synced folder never holds half a picture.
+async function storeAsset(directory, asset, bytes) {
+  const target = path.join(directory, asset);
+  if (existsSync(target)) return;
+  await mkdir(directory, { recursive: true });
+  const temporary = target + '.' + randomBytes(6).toString('hex') + '.tmp';
+  try {
+    await writeFile(temporary, bytes, { flag: 'wx' });
+    await rename(temporary, target);
+  } finally { await unlink(temporary).catch(() => {}); }
+}
 
 // One server per user serves every canvas the local CLI has created or opened.
 export async function serve({ port, lan, obsidian = true, assistant = null }) {
@@ -323,6 +344,38 @@ export async function serve({ port, lan, obsidian = true, assistant = null }) {
         const input = await body(req);
         validateStrokes(input.strokes);
         return json(res, 200, { document: drafts.publish(draftMatch[1], input.strokes) });
+      }
+      // Pictures on the pages: stored once under their content hash next to the
+      // canvas, so retries and copies of a stroke never duplicate the file.
+      const uploadMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/assets$/.exec(req.url);
+      if (uploadMatch && req.method === 'POST') {
+        const [, id] = uploadMatch;
+        const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+        const extension = IMAGE_TYPES[type];
+        if (!extension) throw httpError(415, 'Pictures must be PNG or JPEG.');
+        const file = await locate(id);
+        const image = await rawBody(req, 15 * 1024 * 1024);
+        if (imageType(image) !== extension) throw httpError(400, 'The data is not a ' + extension.slice(1).toUpperCase() + ' image.');
+        const asset = createHash('sha256').update(image).digest('hex').slice(0, 16) + extension;
+        // Serialized with moves, so the picture lands next to the canvas where it is now.
+        await serialize(async () => {
+          const current = index.get(id) || file;
+          await readCanvas(current, id);
+          await storeAsset(assetDirectory(current), asset, image);
+        });
+        return json(res, 200, { asset });
+      }
+      const assetMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/assets\/([^/]+)$/.exec(req.url);
+      if (assetMatch && req.method === 'GET') {
+        const [, id, asset] = assetMatch;
+        if (!validAssetName(asset)) throw httpError(400, 'Invalid picture name.');
+        const file = await locate(id);
+        await readCanvas(file, id);
+        const content = await readFile(path.join(assetDirectory(file), asset)).catch(() => { throw httpError(404, 'The picture is missing next to the canvas.'); });
+        // Content-addressed: a name never changes its bytes.
+        res.writeHead(200, { 'Content-Type': asset.endsWith('.png') ? 'image/png' : 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+        res.end(content);
+        return;
       }
       const pdfMatch = /^\/api\/canvases\/([a-f0-9-]{36})\/pdf$/.exec(req.url);
       if (pdfMatch && req.method === 'GET') {

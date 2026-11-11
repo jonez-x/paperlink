@@ -1,9 +1,9 @@
-import { access, copyFile, mkdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { canvasBase, findCanvasFiles, isCanvasFile, obsidianVault } from './documents.js';
+import { assetDirectory, canvasBase, findCanvasFiles, isCanvasFile, obsidianVault } from './documents.js';
 import { backgroundDirectory, findNote, findNoteInVault, freeName, legacyPreviewName, previewPath } from './preview.js';
 import { readCanvas } from './store.js';
 
@@ -19,6 +19,30 @@ async function moveFile(from, to, { overwrite = false } = {}) {
   }
 }
 
+// Folders (the pictures of a canvas) move the same way; across volumes they are
+// copied whole before the original goes.
+async function moveFolder(from, to) {
+  try { await rename(from, to); }
+  catch (error) {
+    if (error.code !== 'EXDEV') throw error;
+    await cp(from, to, { recursive: true, errorOnExist: true, force: false });
+    await rm(from, { recursive: true, force: true });
+  }
+}
+
+// The pictures folder follows the canvas. Names are content hashes, so when a
+// folder of that name is already there, files it lacks are added and the rest
+// are the same pictures.
+async function moveAssets(fromFile, toFile) {
+  const from = assetDirectory(fromFile), to = assetDirectory(toFile);
+  if (from === to || !(await exists(from))) return;
+  if (!(await exists(to))) return moveFolder(from, to);
+  for (const name of await readdir(from)) {
+    if (!(await exists(path.join(to, name)))) await moveFile(path.join(from, name), path.join(to, name));
+  }
+  await rm(from, { recursive: true, force: true });
+}
+
 // Moves or renames a canvas together with its note.
 export async function moveCanvas(file, id, destination, { withNote = true } = {}) {
   if (!isCanvasFile(destination)) throw new Error('The destination must end in .paperlink.');
@@ -30,6 +54,7 @@ export async function moveCanvas(file, id, destination, { withNote = true } = {}
   const note = withNote ? await findNote(from, id) : null;
   const oldVault = await obsidianVault(file);
   await moveFile(file, destination);
+  await moveAssets(file, destination);
   // Leaving a vault leaves no orphaned preview behind.
   if (oldVault && oldVault !== await obsidianVault(destination)) await unlink(previewPath(oldVault, id)).catch(() => {});
   // Previews live in the vault's preview folder; only ones from earlier versions sit next to the canvas.
@@ -102,14 +127,15 @@ export async function trash(file) {
   await mkdir(directory, { recursive: true });
   const extension = path.extname(file);
   const target = await freeName(directory, path.basename(file, extension), extension);
-  await moveFile(file, target);
+  if ((await stat(file)).isDirectory()) await moveFolder(file, target);
+  else await moveFile(file, target);
   return target;
 }
 
 // Windows has no trash folder to move into; the Recycle Bin is reached through
 // .NET. The path goes in an environment variable, never into the script.
 async function recycle(file) {
-  const script = "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:PAPERLINK_RECYCLE, 'OnlyErrorDialogs', 'SendToRecycleBin')";
+  const script = "Add-Type -AssemblyName Microsoft.VisualBasic; if (Test-Path -LiteralPath $env:PAPERLINK_RECYCLE -PathType Container) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($env:PAPERLINK_RECYCLE, 'OnlyErrorDialogs', 'SendToRecycleBin') } else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:PAPERLINK_RECYCLE, 'OnlyErrorDialogs', 'SendToRecycleBin') }";
   try {
     await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, PAPERLINK_RECYCLE: file }, timeout: 30000, windowsHide: true });
   } catch (error) {
@@ -118,7 +144,7 @@ async function recycle(file) {
   return 'Recycle Bin';
 }
 
-// Moves a canvas, its note and its preview to the trash.
+// Moves a canvas, its note, its preview and its pictures folder to the trash.
 // A PDF that was copied in goes too; one the user kept there already stays.
 export async function deleteCanvas(file, id) {
   const removed = [];
@@ -127,7 +153,7 @@ export async function deleteCanvas(file, id) {
   const note = await findNote(path.dirname(file), id);
   const previews = [vault && previewPath(vault, id), path.join(path.dirname(file), legacyPreviewName(id))].filter(Boolean);
   const pdf = document?.pdf?.copied ? path.join(path.dirname(file), document.pdf.file) : null;
-  for (const candidate of [file, note, pdf, ...previews]) {
+  for (const candidate of [file, note, pdf, assetDirectory(file), ...previews]) {
     if (candidate && await exists(candidate)) { await trash(candidate); removed.push(candidate); }
   }
   await rm(backgroundDirectory(id), { recursive: true, force: true });

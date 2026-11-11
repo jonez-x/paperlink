@@ -36,10 +36,20 @@ function strokeBounds(strokes) {
   } : null;
 }
 
-// SVG elements for a page's strokes, highlighters first so they lie below the ink.
+// SVG elements for a page's strokes: pictures, then highlighters, then the ink.
+// Obsidian shows the preview as an image, and an SVG shown as an image loads no
+// other files, so a linked picture would never appear; embedding it would make
+// every preview (and its sync) as large as the photos. A light placeholder
+// marks where each picture is instead.
+const placeholder = ({ x, y, width, height }) => {
+  const size = Math.max(8, Math.min(20, width / 6, height / 3));
+  return `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="#f3f1ea" stroke="${BORDER}" stroke-width="1.5"/>` +
+    `<text x="${x + width / 2}" y="${y + height / 2 + size * 0.35}" font-family="Arial, Helvetica, sans-serif" font-size="${Math.round(size * 10) / 10}" fill="#a29d90" text-anchor="middle">Image</text>`;
+};
 function strokeElements(strokes) {
   const parsed = strokes.map(parseStroke).filter(Boolean);
-  return [...parsed.filter(stroke => stroke.highlighter), ...parsed.filter(stroke => !stroke.highlighter)].map(stroke => {
+  const pictures = parsed.filter(stroke => stroke.kind === 'image');
+  return [...pictures.map(placeholder), ...[...parsed.filter(stroke => stroke.highlighter), ...parsed.filter(stroke => !stroke.highlighter && stroke.kind !== 'image')].map(stroke => {
     const color = stroke.color ?? INK;
     if (stroke.kind === 'text') {
       return `<text font-family="Arial, Helvetica, sans-serif" font-size="${stroke.width}" fill="${color}">` +
@@ -48,7 +58,7 @@ function strokeElements(strokes) {
     const opacity = stroke.highlighter ? ` opacity="${HIGHLIGHT_OPACITY}"` : '';
     if (stroke.kind === 'pressure') return `<path d="${strokePath(stroke)}" fill="${color}"${opacity}/>`;
     return `<path d="${strokePath(stroke)}" fill="none" stroke="${color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round"${opacity}/>`;
-  });
+  })];
 }
 
 // Keeps the page width so handwriting has the same scale in every preview;

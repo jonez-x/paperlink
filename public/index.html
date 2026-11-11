@@ -215,6 +215,9 @@ main {
 :is(#sheet, .thumb) .ink text { fill: var(--ink); font-family: Arial, Helvetica, sans-serif; white-space: pre; }
 :is(#sheet, .thumb) .pdf-page .ink text { fill: #1f1b16; }
 :is(#sheet, .thumb, #live) .highlight { opacity: 0.35; }
+/* Pictures: a quiet surface while the file loads. */
+:is(#sheet, .thumb) .picture { pointer-events: none; }
+:is(#sheet, .thumb) .picture-placeholder { fill: var(--raised); stroke: var(--line); }
 #sheet .lasso { fill: var(--accent-soft); stroke: var(--accent); stroke-dasharray: 5 4; }
 #sheet .pick-box { fill: none; stroke: var(--accent); stroke-dasharray: 6 4; }
 #sheet .pick-handle { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
@@ -270,6 +273,8 @@ main {
 <button id="lasso" aria-label="Lasso: select, move, recolour" title="Lasso: select, move, recolour" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4c5 0 8 2.5 8 5.5S16.5 15 12 15 4 12.5 4 9.5 7 4 12 4Z" stroke-dasharray="2.5 2.5"/><path d="M8 14c-1.5 2-.5 4.5 2 5.5"/></svg></button>
 <button id="shape-tool" aria-label="Shapes" title="Shapes (tap again to choose)" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="9" height="9"/><circle cx="16" cy="8" r="5"/></svg></button>
 <button id="text-tool" aria-label="Text" title="Text" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7V4h14v3M12 4v16M9 20h6"/></svg></button>
+<button id="image-tool" aria-label="Insert image" title="Insert image (or paste one)" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m4 18 5-5 4 4 2.5-2.5L20 18"/></svg></button>
+<input type="file" id="image-file" accept="image/*" hidden>
 <span class="separator" aria-hidden="true"></span>
 <button id="undo" aria-label="Undo" title="Undo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12" transform="translate(0 -2)"/></svg></button>
 <button id="redo" aria-label="Redo" title="Redo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12" transform="translate(0 -2)"/></svg></button>
@@ -436,6 +441,7 @@ function render() {
   refreshPicked();
   renderNotes();
   document.querySelector('#add-page').hidden = !currentDocument;
+  document.querySelector('#image-tool').hidden = !currentDocument;
   document.querySelector('#export-pdf').hidden = !currentDocument;
   document.querySelector('#ask-tool').hidden = !currentDocument?.assistant;
   document.querySelector('#pages-button').hidden = pages.length < 2 && !currentDocument;
@@ -456,6 +462,14 @@ function parsed(stroke) {
   return result;
 }
 function drawInk(ink) {
+  if (ink.kind === 'image') {
+    const box = { x: ink.x, y: ink.y, width: ink.width, height: ink.height };
+    const picture = element('g', { class: 'picture' });
+    const image = element('image', { ...box, 'data-asset': ink.asset, preserveAspectRatio: 'none' });
+    picture.append(element('rect', { ...box, class: 'picture-placeholder', 'vector-effect': 'non-scaling-stroke' }), image);
+    showPicture(image);
+    return picture;
+  }
   if (ink.kind === 'text') {
     const text = element('text', { 'font-size': ink.width });
     for (const line of textLines(ink)) {
@@ -479,7 +493,40 @@ function appendStroke(index, stroke, group = pageLayer.children[index]) {
   if (!ink || !group) return;
   const drawn = drawInk(ink);
   strokeElements[index].set(stroke, drawn);
-  group.querySelector(ink.highlighter ? '.marks' : '.ink').append(drawn);
+  // Pictures lie under everything else, the newest on top of older ones.
+  if (ink.kind === 'image') {
+    const marks = group.querySelector('.marks');
+    marks.insertBefore(drawn, marks.querySelector(':scope > :not(.picture)'));
+  } else group.querySelector(ink.highlighter ? '.marks' : '.ink').append(drawn);
+}
+
+// ── Pictures: fetched with the device token (it is not a cookie), kept as blob URLs ──
+let pictures = new Map(); // asset → { url } | { loading } | { failed }
+function placePicture(image, url) {
+  image.setAttribute('href', url);
+  image.parentNode?.querySelector('.picture-placeholder')?.remove();
+}
+function showPicture(image) {
+  const asset = image.getAttribute('data-asset'), known = pictures.get(asset);
+  if (known?.url) return placePicture(image, known.url);
+  if (known || !currentDocument) return; // loading, missing, or a draft without a server
+  const id = currentDocument.id, cache = pictures;
+  cache.set(asset, { loading: true });
+  fetch('/api/canvases/' + id + '/assets/' + asset, { headers: { Authorization: 'Bearer ' + deviceToken } })
+    .then(response => response.ok ? response.blob() : Promise.reject(new Error(response.statusText)))
+    .then(blob => {
+      if (cache !== pictures) return;
+      const url = URL.createObjectURL(blob);
+      cache.set(asset, { url });
+      document.querySelectorAll('image[data-asset="' + asset + '"]').forEach(node => placePicture(node, url));
+      scheduleSidebar();
+    })
+    // A missing file keeps its placeholder; another canvas visit tries again.
+    .catch(() => cache.set(asset, { failed: true }));
+}
+function forgetPictures() {
+  for (const entry of pictures.values()) if (entry.url) URL.revokeObjectURL(entry.url);
+  pictures = new Map();
 }
 
 // ── View: pan and zoom in world units, independent of the stored strokes ──
@@ -985,6 +1032,87 @@ function tapText(p) {
   openText(index, at.x, at.y - settings.textSize * 0.6, hit);
 }
 
+// ── Inserting pictures: from Photos, the camera, Files or the clipboard ──
+// Downscaled before upload, so a 12-megapixel photo neither fills the vault
+// nor the iPad's memory. Small PNGs with transparency stay PNG.
+const PICTURE_SIDE = 2400, PNG_LIMIT = 4 * 1024 * 1024;
+function hasTransparency(context, width, height) {
+  const data = context.getImageData(0, 0, width, height).data;
+  for (let i = 3; i < data.length; i += 4) if (data[i] < 255) return true;
+  return false;
+}
+async function preparePicture(file) {
+  const source = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = source;
+    await image.decode().catch(() => { throw new Error('This picture could not be read. Try a JPEG or PNG.'); });
+    const factor = Math.min(1, PICTURE_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * factor)), height = Math.max(1, Math.round(image.naturalHeight * factor));
+    const canvas = Object.assign(document.createElement('canvas'), { width, height });
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0, width, height);
+    const png = file.type === 'image/png' && file.size <= PNG_LIMIT && hasTransparency(context, width, height);
+    if (!png) {
+      // JPEG has no transparency; transparent parts become white paper, not black.
+      context.globalCompositeOperation = 'destination-over';
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, width, height);
+    }
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, png ? 'image/png' : 'image/jpeg', 0.85));
+    canvas.width = canvas.height = 0; // frees the bitmap right away on iOS
+    if (!blob) throw new Error('This picture could not be prepared.');
+    return { blob, width, height };
+  } finally { URL.revokeObjectURL(source); }
+}
+let inserting = false;
+async function insertPicture(file) {
+  if (!currentDocument || !view || inserting || active !== null) return;
+  if (!file?.type.startsWith('image/')) { report('Only pictures can be inserted.', true); return; }
+  inserting = true;
+  const id = currentDocument.id;
+  status.textContent = 'Adding picture…';
+  try {
+    const { blob, width, height } = await preparePicture(file);
+    const { asset } = await api('/' + id + '/assets', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
+    if (currentDocument?.id !== id || active !== null) return;
+    commitText();
+    // Centred in the visible part of the page in view, at most 70% of the page.
+    const index = currentPage(), page = pages[index], top = pageTop(index), screen = size();
+    const left = Math.max(0, view.x), right = Math.min(page.width, view.x + screen.width / view.scale);
+    const upper = Math.max(0, view.y - top), lower = Math.min(page.height, view.y + screen.height / view.scale - top);
+    const cx = right > left ? (left + right) / 2 : page.width / 2, cy = lower > upper ? (upper + lower) / 2 : page.height / 2;
+    const factor = Math.min(1, 0.7 * page.width / width, 0.7 * page.height / height);
+    const w = width * factor, h = height * factor;
+    let offset = 0, stroke;
+    do stroke = formatStroke({ kind: 'image', x: cx - w / 2 + offset, y: cy - h / 2 + offset, width: w, height: h, asset }), offset += 24;
+    while (page.strokes.includes(stroke));
+    const ops = [{ type: 'add', page: page.id, stroke }];
+    applyOps(pages, ops);
+    past.push(ops);
+    future = [];
+    selectTool('lasso');
+    render();
+    save(ops);
+    // Selected right away, so it can be moved and scaled with the handles.
+    pick(index, [stroke]);
+  } catch (error) {
+    showSaveState();
+    report('The picture could not be added: ' + error.message, true);
+    document.querySelector('#storage-info').showPopover();
+  } finally { inserting = false; }
+}
+const pictureInput = document.querySelector('#image-file');
+document.querySelector('#image-tool').onclick = () => { commitText(); closeOptions(); pictureInput.value = ''; pictureInput.click(); };
+pictureInput.onchange = () => { if (pictureInput.files[0]) void insertPicture(pictureInput.files[0]); };
+document.addEventListener('paste', event => {
+  if (!currentDocument || event.target.closest?.('input, textarea')) return;
+  const file = [...(event.clipboardData?.files || [])].find(candidate => candidate.type.startsWith('image/'));
+  if (!file) return;
+  event.preventDefault();
+  void insertPicture(file);
+});
+
 // ── Input: Pencil and mouse write; fingers pan (one) and zoom (two) ──
 const fingers = new Map();
 let touchGesture = null;
@@ -1435,7 +1563,7 @@ function operationId() {
 async function api(route, options = {}) {
   const response = await fetch(route.startsWith('/drafts/') ? '/api' + route : '/api/canvases' + route, {
     ...options,
-    headers: { Authorization: 'Bearer ' + deviceToken, 'Content-Type': 'application/json' }
+    headers: { Authorization: 'Bearer ' + deviceToken, 'Content-Type': 'application/json', ...options.headers }
   });
   const result = await response.json();
   if (!response.ok) throw Object.assign(new Error(result.error), { status: response.status });
@@ -1570,7 +1698,8 @@ async function reloadDocument() {
 }
 
 function adopt(document, contents) {
-  currentDocument = { id: document.id, title: document.title, revision: document.revision, assistant: Boolean(document.assistant) };
+  if (currentDocument?.id !== document.id) forgetPictures();
+  currentDocument ={ id: document.id, title: document.title, revision: document.revision, assistant: Boolean(document.assistant) };
   loadPdf(document).catch(error => report('The PDF could not be loaded: ' + error.message, true));
   try { sessionStorage.setItem('paperlink-open-canvas', document.id); } catch {}
   if (location.hash !== '#canvas=' + document.id) history.replaceState(null, '', location.pathname + '#canvas=' + document.id);
