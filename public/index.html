@@ -79,7 +79,10 @@ strong::before {
 strong span { color: var(--ink); }
 #document-title { min-width: 0; overflow: hidden; color: var(--secondary); white-space: nowrap; text-overflow: ellipsis; }
 #document-title:not(:empty)::before { content: '/'; margin-right: 12px; color: var(--muted); }
-.header-actions { margin-left: auto; display: flex; gap: 4px; }
+.header-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+header .separator { width: 1px; height: 20px; margin: 0 6px; background: var(--line); }
+header button[aria-pressed=true] { background: var(--raised); color: var(--ink); }
+#pages-button { margin-left: -8px; margin-right: 8px; }
 header button { width: 36px; height: 36px; min-height: 36px; padding: 8px; border: 0; background: transparent; color: var(--secondary); }
 header .icon { width: 20px; height: 20px; }
 #storage-info { position: fixed; inset: 56px 12px auto auto; margin: 0; width: min(320px, calc(100vw - 24px)); padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
@@ -149,6 +152,13 @@ nav button:disabled { opacity: 0.35; background: transparent; cursor: default; t
 .panel .swatch[aria-pressed=true] span { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 .panel .size span { display: block; width: 20px; height: var(--size); border-radius: 4px; background: var(--ink); }
 #pick-actions { transform: translateX(-50%); }
+/* Favorite pens: the ink itself, as a dot sized by its width. */
+#favorites { display: flex; gap: 2px; }
+#favorites:empty, nav .separator:has(+ #favorites:empty) { display: none; }
+#favorites button { width: 32px; padding: 0; display: grid; place-items: center; }
+#favorites span { width: var(--size); height: var(--size); border-radius: 50%; background: var(--color, var(--ink)); }
+#favorites .marker span { border-radius: 2px; opacity: 0.6; height: 8px; width: 16px; }
+#favorites button[aria-pressed=true] span { box-shadow: 0 0 0 2px var(--raised), 0 0 0 3px var(--muted); }
 .panel .template { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 72px; padding: 8px 4px 4px; font-size: 12px; line-height: 16px; }
 .panel .template .thumb { width: 36px; height: auto; border-radius: 2px; box-shadow: 0 0 0 1px var(--line); }
 .panel .template .page { fill: var(--paper); }
@@ -178,7 +188,6 @@ body.with-sidebar :is(nav, #tool-options) { left: calc(50% + 96px); max-width: c
 #sidebar .add { margin: 0 16px 16px; color: var(--secondary); }
 @media (max-width: 820px) {
   body.with-sidebar main { margin-left: 0; }
-  body.with-sidebar :is(nav, #tool-options) { left: 50%; max-width: calc(100vw - 16px); }
   #sidebar { box-shadow: var(--shadow); }
 }
 main {
@@ -220,9 +229,9 @@ main {
 #sheet .pick-handle { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
 #sheet .pick-stem { stroke: var(--accent); stroke-width: 1; }
 #sheet .is-editing { visibility: hidden; }
-@media (max-width: 600px) {
+@media (max-width: 700px) {
   header { padding: 0 8px 0 16px; }
-  #document-title { display: none; }
+  #document-title, #page-nav button { display: none; }
 }
 /* Assistant notes: a separate layer over the page, readable at every zoom. */
 #notes { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
@@ -248,10 +257,20 @@ main {
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 <header>
+<button id="pages-button" aria-label="Pages" title="Pages" aria-pressed="false" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
 <strong>paper<span>link</span></strong>
 <span id="document-title"></span>
 
 <div class="header-actions">
+<div id="page-nav" hidden>
+<button id="previous-page" aria-label="Previous page" title="Previous page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button>
+<span id="page-number" role="status" aria-label="Page">1 / 1</span>
+<button id="next-page" aria-label="Next page" title="Next page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+</div>
+<button id="add-page" aria-label="Add page" title="Add page" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6ZM12 10v8M8 14h8"/></svg></button>
+<button id="fit" aria-label="Fit page" title="Fit page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+<button id="notes-toggle" aria-label="Hide assistant notes" title="Hide assistant notes" aria-pressed="true" hidden><span>0</span></button>
+<span class="separator" aria-hidden="true"></span>
 <button id="info" aria-label="Storage information" title="Storage information" popovertarget="storage-info"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.5"/></svg></button>
 <button id="theme" aria-label="Color scheme: System" title="Color scheme: System"></button>
 </div>
@@ -274,16 +293,7 @@ main {
 <button id="undo" aria-label="Undo" title="Undo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12" transform="translate(0 -2)"/></svg></button>
 <button id="redo" aria-label="Redo" title="Redo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12" transform="translate(0 -2)"/></svg></button>
 <span class="separator" aria-hidden="true"></span>
-<button id="fit" aria-label="Fit page" title="Fit page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-<button id="notes-toggle" aria-label="Hide assistant notes" title="Hide assistant notes" aria-pressed="true" hidden><span>0</span></button>
-<button id="add-page" aria-label="Add page" title="Add page" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6ZM12 10v8M8 14h8"/></svg></button>
-<button id="pages-button" aria-label="All pages" title="All pages" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg></button>
-<div id="page-nav" hidden>
-<span class="separator" aria-hidden="true"></span>
-<button id="previous-page" aria-label="Previous page" title="Previous page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button>
-<span id="page-number" role="status" aria-label="Page">1 / 1</span>
-<button id="next-page" aria-label="Next page" title="Next page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-</div>
+<div id="favorites" role="group" aria-label="Favorite pens"></div>
 </nav>
 <div id="tool-options" class="panel" hidden></div>
 <aside id="sidebar" hidden aria-label="Pages"><div class="head"><span>Pages</span><span class="count"></span><button id="sidebar-close" aria-label="Close pages" title="Close pages"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="list"></div><button class="add" id="sidebar-add">Add page</button></aside>
@@ -734,14 +744,15 @@ function point(event) {
 // ── Tools and their settings (kept per browser) ──
 const PEN_COLORS = [null, '#2f6fde', '#e0453a', '#2f9e5b', '#8a4fd1', '#ff7028'];
 const MARKER_COLORS = ['#ffd23f', '#7ee081', '#ff8fc8', '#7cc7ff'];
-const settings = { penColor: null, penWidth: 3, pressure: true, snap: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke', template: 'squared' };
+const settings = { penColor: null, penWidth: 3, pressure: true, snap: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke', template: 'squared',
+  favorites: [{ tool: 'pen', color: null, width: 3 }, { tool: 'pen', color: '#2f6fde', width: 3 }, { tool: 'marker', color: '#ffd23f', width: 20 }] };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('paperlink-tools') || '{}')); } catch {}
 // The pen and highlighter buttons show the ink they draw with.
 function showToolInk() {
   document.getElementById('pen').style.setProperty('--tool-ink', settings.penColor || 'var(--ink)');
   document.getElementById('marker').style.setProperty('--tool-ink', settings.markerColor);
 }
-const keepSettings = () => { showToolInk(); try { localStorage.setItem('paperlink-tools', JSON.stringify(settings)); } catch {} };
+const keepSettings = () => { showToolInk(); showFavorites(); try { localStorage.setItem('paperlink-tools', JSON.stringify(settings)); } catch {} };
 showToolInk();
 const liveLayer = document.querySelector('#live'), overlay = document.querySelector('#overlay');
 
@@ -1150,6 +1161,7 @@ function selectTool(name) {
   closeOptions();
   tool = name;
   for (const [id, value] of Object.entries(tools)) document.getElementById(id).setAttribute('aria-pressed', value === name);
+  showFavorites();
 }
 for (const [id, value] of Object.entries(tools)) {
   document.getElementById(id).onclick = () => {
@@ -1191,12 +1203,51 @@ const sizeButton = (width, max) => (value, pressed, onclick) => {
   button.append(bar);
   return button;
 };
+// ── Favorite pens: up to three saved pens and highlighters, one tap away ──
+const FAVORITE_LIMIT = 3;
+const favoriteKeys = { pen: ['penColor', 'penWidth'], marker: ['markerColor', 'markerWidth'] };
+const sameFavorite = (a, b) => a.tool === b.tool && a.color === b.color && a.width === b.width;
+const currentFavorite = (name = tool) => favoriteKeys[name] && { tool: name, color: settings[favoriteKeys[name][0]], width: settings[favoriteKeys[name][1]] };
+function showFavorites() {
+  const box = document.querySelector('#favorites');
+  if (!Array.isArray(settings.favorites)) settings.favorites = [];
+  const now = currentFavorite();
+  box.replaceChildren(...settings.favorites.filter(favorite => favoriteKeys[favorite?.tool]).map(favorite => {
+    const name = (favorite.tool === 'marker' ? 'Highlighter' : 'Pen') + (favorite.color ? ' ' + favorite.color : '') + ', width ' + favorite.width;
+    const button = textButton('', Boolean(now && sameFavorite(now, favorite)), () => {
+      const [colorKey, widthKey] = favoriteKeys[favorite.tool];
+      settings[colorKey] = favorite.color;
+      settings[widthKey] = favorite.width;
+      selectTool(favorite.tool);
+      keepSettings();
+    }, name);
+    button.setAttribute('aria-label', name);
+    if (favorite.tool === 'marker') button.className = 'marker';
+    const dot = document.createElement('span');
+    dot.style.setProperty('--size', Math.min(16, Math.max(6, favorite.width * 2)) + 'px');
+    if (favorite.color) dot.style.setProperty('--color', favorite.color);
+    button.append(dot);
+    return button;
+  }));
+}
+// Saves the current pen as a favorite, or removes it when it already is one.
+function toggleFavorite() {
+  const now = currentFavorite();
+  if (!now) return;
+  const at = settings.favorites.findIndex(favorite => sameFavorite(favorite, now));
+  if (at >= 0) settings.favorites.splice(at, 1);
+  else settings.favorites = [...settings.favorites, now].slice(-FAVORITE_LIMIT);
+  keepSettings();
+  openOptions(tool);
+}
+const favoriteButton = () => textButton(settings.favorites.some(favorite => sameFavorite(favorite, currentFavorite())) ? 'Remove favorite' : 'Add to favorites', false, toggleFavorite, 'Favorites appear in the toolbar, at most ' + FAVORITE_LIMIT);
+showFavorites();
 const toggle = (key, label, title) => textButton(label, settings[key], () => { settings[key] = !settings[key]; keepSettings(); openOptions(tool); }, title);
 function openOptions(name) {
   const rows = {
     pen: () => [choices('penColor', PEN_COLORS, swatch), choices('penWidth', [2, 3, 5, 8], sizeButton(1.4, 12)),
-      group(toggle('pressure', 'Pressure', 'Apple Pencil pressure varies the width'), toggle('snap', 'Snap shapes', 'Hold the pen still at the end of a stroke for a clean line, circle or rectangle'))],
-    marker: () => [choices('markerColor', MARKER_COLORS, swatch), choices('markerWidth', [12, 20, 32], sizeButton(0.5, 16)), group(toggle('snap', 'Straighten', 'Hold still at the end of a stroke for a straight line'))],
+      group(toggle('pressure', 'Pressure', 'Apple Pencil pressure varies the width'), toggle('snap', 'Snap shapes', 'Hold the pen still at the end of a stroke for a clean line, circle or rectangle')), group(favoriteButton())],
+    marker: () => [choices('markerColor', MARKER_COLORS, swatch), choices('markerWidth', [12, 20, 32], sizeButton(0.5, 16)), group(toggle('snap', 'Straighten', 'Hold still at the end of a stroke for a straight line')), group(favoriteButton())],
     shape: () => [choices('shape', ['line', 'arrow', 'rectangle', 'ellipse'], (value, pressed, onclick) => textButton(value[0].toUpperCase() + value.slice(1), pressed, onclick)),
       choices('penColor', PEN_COLORS, swatch), choices('penWidth', [2, 3, 5, 8], sizeButton(1.4, 12))],
     text: () => [choices('penColor', PEN_COLORS, swatch), choices('textSize', [16, 24, 36, 48], (value, pressed, onclick) => textButton(String(value), pressed, onclick, 'Text size ' + value))],
@@ -1205,6 +1256,7 @@ function openOptions(name) {
   if (!rows) return;
   toolOptions.replaceChildren(...rows());
   toolOptions.dataset.for = name;
+  toolOptions.style.left = '';
   toolOptions.style.top = toolbar.getBoundingClientRect().bottom + 8 + 'px';
   toolOptions.hidden = false;
 }
@@ -1239,7 +1291,7 @@ function addPage(template = settings.template) {
   showPage(pages.findIndex(candidate => candidate.id === page.id));
   save(ops);
 }
-function openPageOptions() {
+function openPageOptions(anchor) {
   const pick = template => () => { settings.template = template; keepSettings(); closeOptions(); addPage(template); };
   toolOptions.replaceChildren(group(...Object.entries(TEMPLATE_NAMES).map(([template, name]) => {
     const button = textButton('', settings.template === template, pick(template), name + ' page');
@@ -1256,14 +1308,17 @@ function openPageOptions() {
     button.append(preview, label);
     return button;
   })));
-  toolOptions.style.top = toolbar.getBoundingClientRect().bottom + 8 + 'px';
+  // Under the header button that opened it, kept inside the window.
+  const box = anchor.getBoundingClientRect();
+  toolOptions.style.top = box.bottom + 8 + 'px';
+  toolOptions.style.left = Math.min(innerWidth - 168, Math.max(168, box.left + box.width / 2)) + 'px';
   toolOptions.hidden = false;
   toolOptions.dataset.for = 'page';
 }
 document.querySelector('#add-page').onclick = event => {
   if (!toolOptions.hidden && toolOptions.dataset.for === 'page') return closeOptions();
   commitText();
-  openPageOptions();
+  openPageOptions(event.currentTarget);
 };
 document.querySelector('#sidebar-add').onclick = () => addPage();
 
