@@ -168,9 +168,9 @@ Notes live on a separate layer: they never change the handwriting, appear live o
 | Start | `Install Paperlink.command`, or `sh install.sh [paperlink.tgz]` | `Install Paperlink.cmd` (runs PowerShell with `-ExecutionPolicy Bypass` for this script only) |
 | Folder | `~/.paperlink` | `%LOCALAPPDATA%\Paperlink` |
 | Node.js | latest 22.x from nodejs.org, SHA-256 checked, in `node/` | same, `win-x64` or `win-arm64` |
-| `paper` | `bin/paper`, added to the PATH in `~/.zprofile` (macOS) and `~/.bashrc` | `bin\paper.cmd`, added to the user PATH, plus a Start menu entry |
+| `paper` | `bin/paper`, added to the PATH in `~/.zprofile` (macOS) or `~/.zshrc` (elsewhere, when it exists or zsh is the login shell), `~/.bashrc`, `~/.bash_profile` (when it exists, or created on macOS for bash users) and `~/.config/fish/conf.d/paperlink.fish` (fish users) | `bin\paper.cmd`, added to the user PATH (kept as REG_EXPAND_SZ), plus a Start menu entry |
 
-`PAPERLINK_HOME` changes the folder. Running an installer again stops the server, replaces the app (and Node only when a newer 22.x exists), then runs `paper setup`, which is skipped without a terminal. Settings and canvases are not touched. CI runs both installers on clean macOS, Windows and Linux runners.
+`PAPERLINK_HOME` changes the folder. Running an installer again stops the server first, replaces the app (and Node only when a newer 22.x exists or the installed `node --version` fails), then runs `paper setup`, which is skipped without a terminal. On Windows the new Node is unpacked next to the old one and swapped by renaming; if the old node.exe is still in use (an MCP server started by Claude Desktop or Cursor), the installer stops with a message to quit those apps, and the old Node stays intact. Settings and canvases are not touched. CI runs both installers on clean macOS, Windows and Linux runners.
 
 ## Platforms
 

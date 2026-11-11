@@ -32,13 +32,18 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$HOME_DIR"
 
+# A running server is stopped before Node and the app are replaced; setup restarts it.
+[ -x "$HOME_DIR/bin/paper" ] && "$HOME_DIR/bin/paper" stop >/dev/null 2>&1 || true
+
 # Node.js: the latest release of the supported line, checked against nodejs.org's checksums.
 base="https://nodejs.org/dist/latest-v$NODE_LINE.x"
 curl -fsSL "$base/SHASUMS256.txt" -o "$work/SHASUMS256.txt" || fail "Cannot reach nodejs.org. Check the internet connection."
 archive="$(grep -o "node-v[0-9.]*-$os-$arch\.tar\.gz" "$work/SHASUMS256.txt" | head -n 1)"
 [ -n "$archive" ] || fail "No Node.js download for $os-$arch."
 version="${archive%-$os-$arch.tar.gz}"; version="${version#node-}"
-if [ "$(cat "$HOME_DIR/node/VERSION" 2>/dev/null || true)" = "$version" ]; then
+# Reused only when the recorded version matches and the binary still runs.
+if [ "$(cat "$HOME_DIR/node/VERSION" 2>/dev/null || true)" = "$version" ] &&
+   [ "$("$HOME_DIR/node/bin/node" --version 2>/dev/null || true)" = "$version" ]; then
   say "✓ Node.js $version is already here"
 else
   say "Downloading Node.js $version …"
@@ -53,8 +58,7 @@ else
 fi
 node="$HOME_DIR/node/bin/node"
 
-# Paperlink itself. A running server is stopped first and restarted by setup.
-[ -x "$HOME_DIR/bin/paper" ] && "$HOME_DIR/bin/paper" stop >/dev/null 2>&1 || true
+# Paperlink itself.
 tar -xzf "$PACKAGE" -C "$work"
 rm -rf "$HOME_DIR/app"
 mv "$work/package" "$HOME_DIR/app"
@@ -67,14 +71,28 @@ chmod +x "$HOME_DIR/bin/paper"
 say "✓ Paperlink $("$node" -p "require(process.argv[1]).version" "$HOME_DIR/app/package.json")"
 
 # `paper` in new terminals.
+# zsh: ~/.zprofile on macOS (Terminal opens login shells), elsewhere ~/.zshrc when
+# it exists or zsh is the login shell. bash: ~/.bashrc, plus ~/.bash_profile when it
+# exists or bash is the login shell on macOS (Terminal opens login shells, which skip
+# ~/.bashrc). fish: a conf.d file. Files that already name the folder stay as they are.
 line="export PATH=\"$HOME_DIR/bin:\$PATH\""
-for rc in "$HOME/.zprofile" "$HOME/.bashrc"; do
-  if [ "$rc" = "$HOME/.zprofile" ] && [ "$os" != darwin ] && [ ! -f "$rc" ]; then continue; fi
-  grep -qsF "$HOME_DIR/bin" "$rc" || printf '\n# Paperlink\n%s\n' "$line" >> "$rc"
-done
+add_line() { grep -qsF "$HOME_DIR/bin" "$1" || printf '\n# Paperlink\n%s\n' "$line" >> "$1"; }
+shell="${SHELL##*/}"
+if [ "$os" = darwin ]; then add_line "$HOME/.zprofile"
+elif [ -f "$HOME/.zshrc" ] || [ "$shell" = zsh ]; then add_line "$HOME/.zshrc"; fi
+add_line "$HOME/.bashrc"
+if [ ! -f "$HOME/.bash_profile" ] && [ "$os" = darwin ] && [ "$shell" = bash ] && [ -f "$HOME/.profile" ]; then
+  # A new ~/.bash_profile hides ~/.profile from bash, so it reads it first.
+  printf '[ -f ~/.profile ] && . ~/.profile\n' > "$HOME/.bash_profile"
+fi
+if [ -f "$HOME/.bash_profile" ] || { [ "$os" = darwin ] && [ "$shell" = bash ]; }; then add_line "$HOME/.bash_profile"; fi
+if [ "$shell" = fish ] || [ -d "$HOME/.config/fish" ]; then
+  mkdir -p "$HOME/.config/fish/conf.d"
+  printf '# Paperlink\nfish_add_path "%s"\n' "$HOME_DIR/bin" > "$HOME/.config/fish/conf.d/paperlink.fish"
+fi
 say "✓ \`paper\` works in new terminal windows"
 echo
 
 # Setup asks questions, so it reads the keyboard even when this script was piped into sh.
-if [ -t 1 ] && [ -r /dev/tty ]; then "$HOME_DIR/bin/paper" setup < /dev/tty
+if [ -t 1 ] && ( : </dev/tty ) 2>/dev/null; then "$HOME_DIR/bin/paper" setup < /dev/tty
 else say "Run \`paper setup\` to finish."; fi

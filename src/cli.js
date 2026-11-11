@@ -964,8 +964,14 @@ async function cmdSetup(ctx) {
   console.log('  ' + c.muted('A few questions, then you can write. Change anything later under Settings in `paper`.') + '\n');
   let config = ctx.config;
 
-  const lan = await ui.confirm({ message: 'Write on an iPad or tablet? (devices on this Wi-Fi may then connect)', initial: true });
-  if (lan === null) return;
+  // A first run suggests the iPad; later runs keep the current answer.
+  const configured = existsSync(configPath());
+  const lan = await ui.confirm({ message: 'Write on an iPad or tablet? (devices on this Wi-Fi may then connect)', initial: configured ? config.lan : true });
+  if (lan === null) {
+    // Saved even when cancelled, so `paper` does not start setup every time.
+    if (!configured) await saveConfig(config);
+    return;
+  }
   config = await saveConfig({ ...config, lan });
 
   const apps = await assistantApps();
@@ -973,12 +979,13 @@ async function cmdSetup(ctx) {
     console.log();
     const connect = await ui.confirm({ message: 'Let AI assistants read your pages and leave notes? Found: ' + apps.map(app => app.name).join(', '), initial: true });
     if (connect) {
+      const connected = new Set();
       for (const app of apps) {
-        try { await app.connect(); console.log(ok(app.name + ' connected' + (app.note ? c.muted(' · ' + app.note) : ''))); }
+        try { await app.connect(); connected.add(app.id); console.log(ok(app.name + ' connected' + (app.note ? c.muted(' · ' + app.note) : ''))); }
         catch (error) { console.log('  ' + c.danger('✗ ' + app.name + ': ' + error.message)); }
       }
-      // Presets for the "Ask" button, in the order apps were found.
-      const presets = apps.map(app => ({ 'claude-code': 'claude', codex: 'codex' })[app.id]).filter(Boolean);
+      // Presets for the "Ask" button: apps that connected, in the order they were found.
+      const presets = apps.filter(app => connected.has(app.id)).map(app => ({ 'claude-code': 'claude', codex: 'codex' })[app.id]).filter(Boolean);
       if (presets.length && !config.assistant) {
         const ask = presets.length === 1
           ? await ui.confirm({ message: 'Also add an "Ask" button to the page that ' + assistantName(presets[0]) + ' answers with notes?', initial: true }).then(yes => yes ? presets[0] : null)

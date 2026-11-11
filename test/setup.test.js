@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { addToConfigFile, mcpServer } from '../src/setup.js';
+import { addToConfigFile, mcpServer, shellCommand } from '../src/setup.js';
 const exec = promisify(execFile);
 
 test('connecting an assistant app keeps its other settings and refuses broken files', async () => {
@@ -36,4 +36,8 @@ test('setup needs a terminal and says so to scripts', async () => {
     assert.equal(failed.code, 1);
     assert.match(JSON.parse(failed.stderr).error, /needs a terminal/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Windows runs assistant commands through the shell with every argument quoted', () => {
+  assert.equal(shellCommand('claude', ['mcp', 'add', '--', 'C:\\Program Files\\node.exe']), '"claude" "mcp" "add" "--" "C:\\Program Files\\node.exe"');
 });
