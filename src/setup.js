@@ -18,8 +18,15 @@ function appData() {
   return process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config');
 }
 
-const run = (command, args) => new Promise(resolve =>
-  execFile(command, args, { windowsHide: true, timeout: 30000 }, (error, stdout, stderr) => resolve({ ok: !error, missing: error?.code === 'ENOENT', output: (stderr || stdout || error?.message || '').trim() })));
+// On Windows npm installs `claude` as claude.cmd, which only a shell can run.
+// The arguments are fixed words and absolute paths, so quoting them is enough.
+export const shellCommand = (command, args) => [command, ...args].map(part => '"' + part + '"').join(' ');
+const run = (command, args) => new Promise(resolve => {
+  const options = { windowsHide: true, timeout: 30000 };
+  const done = (error, stdout, stderr) => resolve({ ok: !error, missing: error?.code === 'ENOENT', output: (stderr || stdout || error?.message || '').trim() });
+  if (process.platform === 'win32') execFile(shellCommand(command, args), [], { ...options, shell: true }, done);
+  else execFile(command, args, options, done);
+});
 
 // Adds or replaces mcpServers.paperlink and keeps everything else in the file.
 // A file that is not valid JSON is left alone.
