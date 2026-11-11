@@ -4,25 +4,43 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Paperlink</title>
 <style>
+/* Direction: calm, exact, a little warm. A desk with paper worksheets and a
+   graphite pencil. The page carries the moment; the chrome stays quiet, and the
+   pen icon takes the current ink colour. Spacing on a 4px grid, one easing. */
 :root {
   color-scheme: light;
-  --bg: #f5f3ea;
-  --paper: #fffdf5;
-  --ink: #24231f;
-  --muted: #777367;
-  --line: #dedbd0;
-  --grid: #eae7dd;
+  --desk: #eeebe5;
+  --surface: #fbfaf7;
+  --raised: #efebe4;
+  --paper: #fffdf9;
+  --ink: #1f1b16;
+  --secondary: #5e554a;
+  --muted: #7b7266;
+  --line: rgb(31 27 22 / 0.1);
+  --grid: rgb(31 27 22 / 0.09);
   --accent: #ff7028;
+  --accent-ink: #b9480f;
+  --accent-soft: rgb(255 112 40 / 0.14);
+  --shadow: 0 1px 2px rgb(31 27 22 / 0.06), 0 8px 24px rgb(31 27 22 / 0.08);
+  --page-shadow: rgb(31 27 22 / 0.07);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
 }
 :root[data-theme=dark] {
   color-scheme: dark;
-  --bg: #111111;
-  --paper: #171716;
-  --ink: #f4f3eb;
-  --muted: #a09e94;
-  --line: #30302c;
-  --grid: #252522;
-  --accent: #ff7028;
+  --desk: #121110;
+  --surface: #1c1a18;
+  --raised: #282623;
+  --paper: #1a1917;
+  --ink: #efe9de;
+  --secondary: #aaa398;
+  --muted: #8a847a;
+  --line: rgb(239 233 222 / 0.09);
+  --grid: rgb(239 233 222 / 0.07);
+  --accent-ink: #ff8a4c;
+  --accent-soft: rgb(255 112 40 / 0.18);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+  --page-shadow: rgb(0 0 0 / 0.35);
 }
 * { box-sizing: border-box; }
 html { height: 100%; overflow: hidden; overscroll-behavior: none; }
@@ -34,186 +52,183 @@ body {
   display: flex;
   flex-direction: column;
   margin: 0;
-  background-color: var(--bg);
-  background-image: linear-gradient(var(--line) 1px, transparent 1px),
-                    linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size: 240px 240px;
+  background: var(--desk);
   color: var(--ink);
-  font: 14px Arial, Helvetica, sans-serif;
+  font: 14px/20px var(--font);
+  -webkit-font-smoothing: antialiased;
 }
 header {
   flex-shrink: 0;
-  min-height: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
-  gap: 20px;
-  padding: 0 24px;
-  background: var(--bg);
+  gap: 12px;
+  padding: 0 12px 0 20px;
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
-strong { display: flex; align-items: center; font-size: 20px; letter-spacing: -1px; font-weight: 600; }
+strong { display: flex; align-items: center; font-size: 16px; font-weight: 600; letter-spacing: 0; }
 strong::before {
   content: '';
-  width: 10px;
-  height: 10px;
-  margin-right: 20px;
+  width: 8px;
+  height: 8px;
+  margin: 0 20px 0 0;
   background: #ff7028;
-  box-shadow: 0 -10px #ffb02e, 10px 0 #ffb02e, 0 10px #f34d2c;
+  box-shadow: 0 -8px #ffb02e, 8px 0 #ffb02e, 0 8px #f34d2c;
 }
 strong span { color: var(--ink); }
- .header-actions { margin-left: auto; display: flex; gap: 4px; }
-header button { padding: 10px; width: 44px; height: 44px; border: 0; background: transparent; }
-#storage-info { position: fixed; inset: 54px 24px auto auto; margin: 0; max-width: min(300px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); box-shadow: 0 4px 20px #0002; }
-#storage-info p { margin: 8px 0 0; line-height: 1.5; color: var(--muted); font-size: 13px; }
-#status { font-size: 14px; }
+#document-title { min-width: 0; overflow: hidden; color: var(--secondary); white-space: nowrap; text-overflow: ellipsis; }
+#document-title:not(:empty)::before { content: '/'; margin-right: 12px; color: var(--muted); }
+.header-actions { margin-left: auto; display: flex; gap: 4px; }
+header button { width: 36px; height: 36px; min-height: 36px; padding: 8px; border: 0; background: transparent; color: var(--secondary); }
+header .icon { width: 20px; height: 20px; }
+#storage-info { position: fixed; inset: 56px 12px auto auto; margin: 0; width: min(320px, calc(100vw - 24px)); padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+#storage-info p { margin: 4px 0 12px; line-height: 20px; color: var(--secondary); font-size: 13px; }
+#storage-info button { width: 100%; margin-top: 8px; }
+#status { font-weight: 500; }
 nav {
   position: absolute;
   z-index: 2;
-  top: 76px;
+  top: 60px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 4px;
-  padding: 6px;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  box-shadow: 0 4px 18px #00000018;
-  transition: opacity 80ms ease, translate 80ms ease;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transition: opacity 120ms var(--ease), translate 120ms var(--ease);
+  max-width: calc(100vw - 16px);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 nav.is-hidden { opacity: 0; translate: 0 -8px; pointer-events: none; }
-nav button { width: 44px; height: 44px; min-height: 44px; padding: 10px; border: 0; border-radius: 4px; }
-nav .separator { width: 1px; margin: 8px 3px; background: var(--line); }
-.icon { display: block; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { nav { transition: none; } }
+nav button { flex-shrink: 0; width: 40px; height: 40px; min-height: 40px; padding: 9px; border: 0; color: var(--secondary); }
+nav .separator { flex-shrink: 0; width: 1px; height: 24px; margin: 0 4px; background: var(--line); }
+.icon { display: block; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 button {
-  min-height: 44px;
+  min-height: 36px;
   font: inherit;
   color: var(--ink);
-  background: var(--bg);
+  background: transparent;
   border: 1px solid var(--line);
-  padding: 10px 18px;
-  border-radius: 0;
+  padding: 8px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 120ms var(--ease), color 120ms var(--ease), border-color 120ms var(--ease), transform 120ms var(--ease);
+  -webkit-tap-highlight-color: transparent;
 }
-nav button + button { border-left: 0; }
-button[aria-pressed=true] { background: var(--accent); color: #17120b; }
-button { cursor: pointer; }
-button:hover { background: var(--line); }
-button[aria-pressed=true]:hover { background: #ff8b40; }
-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-nav button:disabled { opacity: 0.35; background: transparent; cursor: default; }
-nav { max-width: calc(100vw - 16px); overflow-x: auto; scrollbar-width: none; }
+button:hover { background: var(--raised); }
+button:active { transform: scale(0.97); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The active tool: a surface step with a hairline, not a fill. */
+nav button[aria-pressed=true] { background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+/* Signature: the pen and highlighter icons carry the ink they draw with. */
+#pen, #marker, #shape-tool, #text-tool { position: relative; }
+#pen::after, #marker::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: 5px; height: 3px; border-radius: 2px; background: var(--tool-ink, var(--ink)); opacity: 0; transition: opacity 120ms var(--ease); }
+#pen[aria-pressed=true]::after, #marker[aria-pressed=true]::after { opacity: 1; }
+nav button:disabled { opacity: 0.35; background: transparent; cursor: default; transform: none; }
+.primary { background: var(--ink); border-color: var(--ink); color: var(--surface); font-weight: 500; }
+.primary:hover { background: var(--secondary); }
 /* Options of the active tool: tap it again. */
-.panel { position: absolute; z-index: 3; display: flex; flex-wrap: nowrap; overflow-x: auto; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: 0 4px 18px #00000024; }
+.panel { position: absolute; z-index: 3; display: flex; flex-wrap: nowrap; overflow-x: auto; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); scrollbar-width: none; animation: rise 160ms var(--ease); }
 .panel[hidden] { display: none; }
-#tool-options { top: 136px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); }
-.panel .group { display: flex; gap: 4px; align-items: center; }
-.panel .group + .group { padding-left: 8px; border-left: 1px solid var(--line); }
-.panel button { min-height: 36px; padding: 6px 10px; border: 1px solid transparent; border-radius: 4px; background: transparent; font-size: 13px; }
-.panel button[aria-pressed=true] { border-color: var(--accent); background: #ff702822; color: var(--ink); }
+@keyframes rise { from { opacity: 0; translate: 0 -4px; } }
+#tool-options { top: 116px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); }
+.panel .group { display: flex; gap: 2px; align-items: center; }
+.panel .group + .group { padding-left: 4px; margin-left: 4px; border-left: 1px solid var(--line); }
+.panel button { flex-shrink: 0; min-height: 36px; padding: 6px 12px; border: 0; border-radius: 10px; background: transparent; font-size: 13px; color: var(--secondary); }
+.panel button:hover { background: var(--raised); }
+.panel button[aria-pressed=true] { background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
 .panel .swatch { width: 36px; padding: 0; display: grid; place-items: center; }
-.panel .swatch span { width: 22px; height: 22px; border-radius: 50%; background: var(--color, var(--ink)); box-shadow: inset 0 0 0 1px #0002; }
-.panel .size span { display: block; width: 22px; height: var(--size); border-radius: 4px; background: var(--ink); }
+.panel .swatch span { width: 20px; height: 20px; border-radius: 50%; background: var(--color, var(--ink)); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12); }
+.panel .swatch[aria-pressed=true] { background: transparent; box-shadow: none; }
+.panel .swatch[aria-pressed=true] span { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.panel .size span { display: block; width: 20px; height: var(--size); border-radius: 4px; background: var(--ink); }
 #pick-actions { transform: translateX(-50%); }
-#text-editor { position: absolute; z-index: 1; margin: 0; padding: 0; border: 1px dashed var(--accent); outline: none; background: transparent; color: var(--ink); font-family: Arial, Helvetica, sans-serif; line-height: 1.25; white-space: pre; overflow: hidden; resize: none; user-select: text; -webkit-user-select: text; }
-#text-editor.on-pdf { color: #24231f; }
-#overview { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; background: #0006; }
+#text-editor { position: absolute; z-index: 1; margin: 0; padding: 0; border: 1px dashed var(--accent); border-radius: 2px; outline: none; background: transparent; color: var(--ink); font-family: Arial, Helvetica, sans-serif; line-height: 1.25; white-space: pre; overflow: hidden; resize: none; user-select: text; -webkit-user-select: text; }
+#text-editor.on-pdf { color: #1f1b16; }
+#overview { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; background: rgb(18 17 16 / 0.32); animation: fade 160ms var(--ease); }
+@keyframes fade { from { opacity: 0; } }
 #overview[hidden] { display: none; }
-#overview > div { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 16px; border-radius: 8px; background: var(--bg); box-shadow: 0 8px 30px #0005; }
-#overview .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-weight: 600; }
-#overview .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 14px; }
-#overview figure { position: relative; margin: 0; text-align: center; color: var(--muted); font-size: 12px; }
-#overview figure > button { display: block; width: 100%; padding: 0; border: 2px solid transparent; border-radius: 4px; background: transparent; }
-#overview figure > button[aria-current=true] { border-color: var(--accent); }
+#overview > div { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+#overview .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; font-size: 16px; font-weight: 500; }
+#overview .head button { width: 36px; padding: 0; border: 0; color: var(--secondary); }
+#overview .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 16px; }
+#overview figure { position: relative; margin: 0; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+#overview figcaption { margin-top: 8px; }
+#overview figure > button { display: block; width: 100%; padding: 0; border: 0; border-radius: 6px; background: transparent; box-shadow: 0 0 0 1px var(--line), 0 2px 8px var(--page-shadow); overflow: hidden; }
+#overview figure > button[aria-current=true] { box-shadow: 0 0 0 2px var(--accent), 0 2px 8px var(--page-shadow); }
 #overview .thumb { display: block; width: 100%; height: auto; }
-#overview .remove { position: absolute; top: 4px; right: 4px; min-height: 28px; width: 28px; padding: 0; border-radius: 50%; }
+#overview .remove { position: absolute; top: 8px; right: 8px; width: 28px; min-height: 28px; padding: 0; border-radius: 8px; background: var(--surface); color: var(--secondary); }
 main {
   position: relative;
   width: 100%;
-  max-width: none;
   flex: 1;
   min-height: 0;
-  margin: 0 auto;
-  padding: 12px 24px 24px;
+  margin: 0;
+  padding: 0;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-main::before, main::after {
-  content: '';
-  position: absolute;
-  pointer-events: none;
-  opacity: .65;
-}
-main::before {
-  top: 12px;
-  bottom: 24px;
-  left: 12px;
-  width: 6px;
-  background: repeating-linear-gradient(to bottom, var(--muted) 0 1px, transparent 1px 14px);
-}
-main::after {
-  bottom: 12px;
-  left: 24px;
-  right: 24px;
-  height: 6px;
-  background: repeating-linear-gradient(to right, var(--muted) 0 1px, transparent 1px 14px);
-}
 #sheet {
   display: block;
   width: 100%;
   height: 100%;
-  border: 1px solid var(--line);
   touch-action: none;
 }
 :is(#sheet, .thumb) .page { fill: var(--paper); stroke: var(--line); }
+#sheet .page-shadow { fill: var(--page-shadow); }
 #sheet .grid-line { fill: none; stroke: var(--grid); }
-#sheet .mat-line { fill: none; stroke: var(--line); }
 :is(#sheet, .thumb) .ink path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 /* PDF pages keep their original look in both themes, so ink stays dark on them. */
 :is(#sheet, .thumb) .pdf-page .page { fill: #ffffff; }
-:is(#sheet, .thumb) .pdf-page .ink path { stroke: #24231f; }
+:is(#sheet, .thumb) .pdf-page .ink path { stroke: #1f1b16; }
 /* Pressure strokes are filled outlines; text uses the theme ink unless coloured. */
 :is(#sheet, .thumb) .marks path, #live path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 :is(#sheet, .thumb) path.filled, #live path.filled { fill: var(--ink); stroke: none; }
-:is(#sheet, .thumb) .pdf-page path.filled { fill: #24231f; stroke: none; }
+:is(#sheet, .thumb) .pdf-page path.filled { fill: #1f1b16; stroke: none; }
 :is(#sheet, .thumb) .ink text { fill: var(--ink); font-family: Arial, Helvetica, sans-serif; white-space: pre; }
-:is(#sheet, .thumb) .pdf-page .ink text { fill: #24231f; }
+:is(#sheet, .thumb) .pdf-page .ink text { fill: #1f1b16; }
 :is(#sheet, .thumb, #live) .highlight { opacity: 0.35; }
-#sheet .lasso { fill: #ff702810; stroke: var(--accent); stroke-dasharray: 5 4; }
+#sheet .lasso { fill: var(--accent-soft); stroke: var(--accent); stroke-dasharray: 5 4; }
 #sheet .pick-box { fill: none; stroke: var(--accent); stroke-dasharray: 6 4; }
 #sheet .is-editing { visibility: hidden; }
 @media (max-width: 600px) {
-  header { padding: 0 16px; gap: 12px; }
-
-  main { padding: 12px 20px 20px; }
-  main::before { left: 8px; bottom: 20px; }
-  main::after { bottom: 8px; left: 20px; right: 20px; }
-  nav { top: 72px; }
+  header { padding: 0 8px 0 16px; }
+  #document-title { display: none; }
 }
 /* Assistant notes: a separate layer over the page, readable at every zoom. */
 #notes { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 #notes.is-hidden { display: none; }
-.note { position: absolute; pointer-events: auto; width: max-content; max-width: 280px; padding: 8px 30px 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--ink); box-shadow: 0 4px 14px #0000002a; font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.note { position: absolute; pointer-events: auto; width: max-content; max-width: 280px; padding: 8px 32px 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); font-size: 13px; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .note.stale { border-left-color: var(--muted); }
-.note small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
-.note button { position: absolute; top: 3px; right: 3px; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; }
-#notes-toggle span { font-size: 11px; font-weight: 600; }
-#page-nav { display: flex; gap: 4px; }
+.note small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 16px; }
+.note button { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; }
+#notes-toggle span { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+#page-nav { display: flex; align-items: center; gap: 2px; }
 #page-nav[hidden] { display: none; }
-#page-number { min-width: 44px; padding: 0 6px; align-self: center; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
-#sheet .selection { fill: #ff702818; stroke: var(--accent); stroke-dasharray: 6 4; }
-#ask { position: fixed; z-index: 3; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); box-shadow: 0 6px 24px #00000030; }
-#ask textarea { box-sizing: border-box; width: 100%; min-height: 72px; margin: 8px 0 10px; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--ink); font: inherit; resize: vertical; }
+#page-number { min-width: 48px; padding: 0 4px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--secondary); }
+#sheet .selection { fill: var(--accent-soft); stroke: var(--accent); stroke-dasharray: 6 4; }
+#ask { position: fixed; z-index: 3; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); animation: rise 220ms var(--ease); }
+#ask textarea { width: 100%; min-height: 72px; margin: 8px 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); font: inherit; resize: vertical; }
+#ask textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
 #ask .actions { display: flex; gap: 8px; justify-content: flex-end; }
-#ask label { color: var(--muted); font-size: 13px; }
-#ask-send { background: var(--accent); color: #17120b; border-color: var(--accent); }
-#info[data-error=true] { color: #df5429; background: #df542918; }
-#connection-status[data-error=true] { color: #df5429; }
+#ask label { color: var(--secondary); font-size: 13px; }
+#ask-send { background: var(--accent); color: #1f1208; border-color: var(--accent); font-weight: 500; }
+#ask-send:hover { background: #ff8a4c; }
+#info[data-error=true] { color: #dc2626; background: rgb(220 38 38 / 0.1); }
+#connection-status[data-error=true] { color: #dc2626; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 <header>
 <strong>paper<span>link</span></strong>
+<span id="document-title"></span>
 
 <div class="header-actions">
 <button id="info" aria-label="Storage information" title="Storage information" popovertarget="storage-info"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.5"/></svg></button>
@@ -259,9 +274,8 @@ main::after {
 <main><div id="notes" aria-label="Assistant notes"></div><textarea id="text-editor" hidden spellcheck="false" aria-label="Text"></textarea><div id="pick-actions" class="panel" hidden></div><svg id="sheet" aria-label="Writing surface">
 <defs>
 <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path class="grid-line" d="M 28 0 L 0 0 0 28"/></pattern>
-<pattern id="mat" width="240" height="240" patternUnits="userSpaceOnUse"><path class="mat-line" d="M 240 0 L 0 0 0 240"/></pattern>
 </defs>
-<rect id="mat-area" fill="url(#mat)"/>
+<rect id="mat-area" fill="none"/>
 <g id="pages"></g>
 <g id="live"></g>
 <g id="overlay"></g>
@@ -369,7 +383,10 @@ function render() {
   const groups = pages.map((page, index) => {
     const pdf = page.pdfPage !== undefined;
     const group = element('g', { transform: 'translate(0 ' + pageTop(index) + ')', class: pdf ? 'pdf-page' : '' });
-    group.append(element('rect', { class: 'page', width: page.width, height: page.height, 'vector-effect': 'non-scaling-stroke' }));
+    // Paper lying on the desk: two soft offset layers instead of a blur filter, cheap while zooming.
+    group.append(element('rect', { class: 'page-shadow', x: -3, y: 6, width: page.width + 6, height: page.height + 4, rx: 6, opacity: 0.5 }),
+      element('rect', { class: 'page-shadow', x: -1, y: 2, width: page.width + 2, height: page.height + 2, rx: 2 }),
+      element('rect', { class: 'page', width: page.width, height: page.height, 'vector-effect': 'non-scaling-stroke' }));
     if (pdf) group.append(element('image', { 'data-page': page.id, width: page.width, height: page.height, preserveAspectRatio: 'none', ...(backgrounds.get(page.id) && { href: backgrounds.get(page.id).url }) }));
     else group.append(element('rect', { width: page.width, height: page.height, fill: 'url(#grid)' }));
     const marks = element('g', { class: 'marks' }), ink = element('g', { class: 'ink' });
@@ -385,6 +402,8 @@ function render() {
   document.querySelector('#export-pdf').hidden = !currentDocument;
   document.querySelector('#ask-tool').hidden = !currentDocument?.assistant;
   document.querySelector('#pages-button').hidden = pages.length < 2 && !currentDocument;
+  document.querySelector('#document-title').textContent = currentDocument?.title ?? '';
+  if (currentDocument) document.title = currentDocument.title + ' · Paperlink';
   updatePageNav();
 }
 
@@ -428,23 +447,25 @@ function appendStroke(index, stroke, group = pageLayer.children[index]) {
 // ── View: pan and zoom in world units, independent of the stored strokes ──
 let view = null; // { x, y, scale }: scale = screen pixels per world unit
 function size() { return { width: sheet.clientWidth || 1, height: sheet.clientHeight || 1 }; }
+// Room above the page for the floating toolbar, and a margin around it.
+const TOP = 72, MARGIN = 24;
 function fitScale(index = 0) {
   const { width, height } = size();
-  return Math.min((width - 48) / documentWidth(), (height - 48) / pages[index].height);
+  return Math.min((width - 2 * MARGIN) / documentWidth(), (height - TOP - MARGIN) / pages[index].height);
 }
 // Fits the page in view (the first one before any view exists).
 function fit() {
   const { width } = size();
   const index = view ? currentPage() : 0;
   const scale = fitScale(index);
-  view = { scale, x: (documentWidth() - width / scale) / 2, y: pageTop(index) - 24 / scale };
+  view = { scale, x: (documentWidth() - width / scale) / 2, y: pageTop(index) - TOP / scale };
   applyView();
 }
 // The page under the middle of the screen.
 const currentPage = () => pageAt(view.y + size().height / view.scale / 2);
 // Moves to a page at the current zoom, its top edge just below the toolbar.
 function showPage(index) {
-  view.y = pageTop(Math.min(pages.length - 1, Math.max(0, index))) - 24 / view.scale;
+  view.y = pageTop(Math.min(pages.length - 1, Math.max(0, index))) - TOP / view.scale;
   applyView();
 }
 function updatePageNav() {
@@ -467,7 +488,7 @@ function applyView() {
   const mat = document.querySelector('#mat-area');
   for (const [key, value] of Object.entries({ x: view.x, y: view.y, width: w, height: h })) mat.setAttribute(key, value);
   // Grid lines stay one screen pixel wide at every zoom level.
-  for (const line of sheet.querySelectorAll('.grid-line, .mat-line')) line.setAttribute('stroke-width', 1 / view.scale);
+  for (const line of sheet.querySelectorAll('.grid-line')) line.setAttribute('stroke-width', 1 / view.scale);
   scheduleBackgrounds();
   positionNotes();
   positionPicked();
@@ -674,7 +695,13 @@ const PEN_COLORS = [null, '#2f6fde', '#e0453a', '#2f9e5b', '#8a4fd1', '#ff7028']
 const MARKER_COLORS = ['#ffd23f', '#7ee081', '#ff8fc8', '#7cc7ff'];
 const settings = { penColor: null, penWidth: 3, pressure: true, markerColor: '#ffd23f', markerWidth: 20, shape: 'line', textSize: 24, eraser: 'stroke' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('paperlink-tools') || '{}')); } catch {}
-const keepSettings = () => { try { localStorage.setItem('paperlink-tools', JSON.stringify(settings)); } catch {} };
+// The pen and highlighter buttons show the ink they draw with.
+function showToolInk() {
+  document.getElementById('pen').style.setProperty('--tool-ink', settings.penColor || 'var(--ink)');
+  document.getElementById('marker').style.setProperty('--tool-ink', settings.markerColor);
+}
+const keepSettings = () => { showToolInk(); try { localStorage.setItem('paperlink-tools', JSON.stringify(settings)); } catch {} };
+showToolInk();
 const liveLayer = document.querySelector('#live'), overlay = document.querySelector('#overlay');
 
 // Erases whole strokes, or with the precise eraser only the part under it.
