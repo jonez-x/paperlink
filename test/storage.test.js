@@ -87,6 +87,9 @@ test('page templates and pages inserted after another page', async () => {
     assert.deepEqual(saved.pages.map(p => [p.id === first ? 'first' : p.id, p.template ?? null]), [['first', null], ['lined-page', 'lined'], ['end-page', null], ['dotted-page', 'dotted']]);
     await assert.rejects(saveOperations(file, document.id, { operationId: 'd', ops: [{ type: 'addPage', page: page('bad-page', 'music') }] }), error => error.status === 400);
     await assert.rejects(saveCanvas(file, document.id, { revision: saved.revision, operationId: 'e', pages: [...saved.pages, { ...page('x-page', 'zigzag'), strokes: [] }] }), error => error.status === 400);
+    // Before a page: how undo puts back a removed first page.
+    await saveOperations(file, document.id, { operationId: 'f', ops: [{ type: 'addPage', page: page('front-page'), before: first }] });
+    assert.equal((await readCanvas(file, document.id)).pages[0].id, 'front-page');
     // Older pages without a template keep their squares; blank has none.
     assert.ok(templateMarks(undefined, 900, 1273).lines.length > 70);
     assert.deepEqual(templateMarks('blank', 900, 1273), { lines: [], dots: [] });

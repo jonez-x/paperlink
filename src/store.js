@@ -131,7 +131,8 @@ export function validAnnotation(note) {
 // Edits as operations, so several devices can write at once without conflicts:
 //   { type: 'add', page, stroke }       adds a stroke unless it is there
 //   { type: 'remove', page, stroke }    removes it if it is there
-//   { type: 'addPage', page: { id, width, height, template? }, after? }  after: the page it follows
+//   { type: 'addPage', page: { id, width, height, template? }, after?, before? }
+//                                       after/before: the page it follows or precedes
 //   { type: 'removePage', page }        empty blank pages only; PDF pages stay
 //   { type: 'addAnnotation', annotation } / { type: 'removeAnnotation', id }
 // Each one is idempotent, so replays and concurrent edits converge.
@@ -139,7 +140,7 @@ export function validateOperations(ops) {
   if (!Array.isArray(ops) || !ops.length || ops.length > 5000) throw Object.assign(new Error('Invalid operations.'), { status: 400 });
   for (const op of ops) {
     const valid = ['add', 'remove'].includes(op?.type) ? PAGE_ID.test(op.page ?? '') && typeof op.stroke === 'string'
-      : op?.type === 'addPage' ? PAGE_ID.test(op.page?.id ?? '') && dimension(op.page.width) && dimension(op.page.height) && validTemplate(op.page.template) && (op.after === undefined || PAGE_ID.test(op.after))
+      : op?.type === 'addPage' ? PAGE_ID.test(op.page?.id ?? '') && dimension(op.page.width) && dimension(op.page.height) && validTemplate(op.page.template) && (op.after === undefined || PAGE_ID.test(op.after)) && (op.before === undefined || PAGE_ID.test(op.before))
       : op?.type === 'removePage' ? PAGE_ID.test(op.page ?? '')
       : op?.type === 'addAnnotation' ? validAnnotation(op.annotation)
       : op?.type === 'removeAnnotation' ? PAGE_ID.test(op.id ?? '') : false;
@@ -161,9 +162,10 @@ export function applyOperations(pages, ops, annotations = []) {
     }
     if (op.type === 'addPage') {
       if (!pages.some(page => page.id === op.page.id) && pages.length < 500) {
-        // After the page it follows when that one still exists, else at the end.
+        // After `after` or before `before` when that page still exists, else at the end.
         const after = op.after === undefined ? -1 : pages.findIndex(page => page.id === op.after);
-        pages.splice(after < 0 ? pages.length : after + 1, 0, { id: op.page.id, width: op.page.width, height: op.page.height, ...(op.page.template && { template: op.page.template }), strokes: [] });
+        const before = op.before === undefined ? -1 : pages.findIndex(page => page.id === op.before);
+        pages.splice(after >= 0 ? after + 1 : before >= 0 ? before : pages.length, 0, { id: op.page.id, width: op.page.width, height: op.page.height, ...(op.page.template && { template: op.page.template }), strokes: [] });
       }
       continue;
     }
